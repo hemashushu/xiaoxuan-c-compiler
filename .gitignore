@@ -2,6 +2,7 @@
 /Cargo.lock
 /TODO
 /REF
+/IGNORE
 
 *.elf
 *.so
@@ -11,3 +12,4 @@
 
 .idea/
 .vscode/
+.github/

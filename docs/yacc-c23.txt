@@ -1,0 +1,758 @@
+ISO C23 Yacc grammar
+(ISO/IEC 9899:2024, commonly called C23)
+
+Based on the C11 grammar originally published by Jutta Degener (jutta@pobox.com, 2012,
+last edited 2012-12-18 by DAGwyn@aol.com) and updated here to the 2024 ISO C standard.
+
+This grammar assumes that translation phases 1..6 have already been completed,
+including preprocessing, _Pragma processing, and string literal concatenation.
+Transliteration of universal character names (\uHHHH or \UHHHHHHHH) must have been
+done by the preprocessor.
+
+Key changes from C11 to C23:
+  - New type specifiers: _BitInt(N), _Decimal32, _Decimal64, _Decimal128,
+      typeof(expr-or-type), typeof_unqual(expr-or-type)
+  - New keywords: constexpr, nullptr, true, false, typeof, typeof_unqual
+  - Attribute syntax [[...]] added throughout (declaration, struct/union/enum,
+      labeled statements, enumerators, function definitions, etc.)
+  - constexpr storage-class specifier for object-level constants
+  - nullptr: null-pointer constant of type nullptr_t
+  - true / false become keywords (bool values); _Bool renamed preferred form bool
+  - static_assert without a message string: _Static_assert(expr) ;
+  - Enumerations with fixed underlying type: enum E : int { ... }
+  - Empty initializer: = {}
+  - Labels may precede declarations and appear at the end of compound statements;
+    label non-terminal separated from labeled_statement
+  - Unnamed parameters in function definitions: int f(int, double) { ... }
+  - Variadic functions with no named parameter: void f(...) { ... }
+  - Removed: K&R-style function definitions and declarations
+      (identifier_list in direct_declarator; declaration_list in function_definition)
+  - _Imaginary: kept as a non-mandated extension (same as C11)
+  - Deprecated: _Noreturn function specifier (use [[noreturn]] attribute instead)
+  - REGISTER: deprecated (kept in grammar, behavior is implementation-defined)
+
+New shift/reduce conflicts (all correctly resolved by default):
+  IF '(' expression ')' statement _ ELSE statement
+  ATOMIC _ '(' type_name ')'
+  label _ statement  (prefer shift -> labeled_statement)
+  balanced_token_seq _  (prefer shift -> longer balanced-token sequence)
+
+
+%token	IDENTIFIER I_CONSTANT F_CONSTANT STRING_LITERAL FUNC_NAME SIZEOF
+%token	PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
+%token	AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
+%token	SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
+%token	XOR_ASSIGN OR_ASSIGN
+%token	DC_OP			/* '::' used in attribute-prefixed-tokens */
+%token	TYPEDEF_NAME ENUMERATION_CONSTANT
+
+%token	TYPEDEF EXTERN STATIC AUTO REGISTER INLINE
+%token	CONSTEXPR		/* C23: constexpr storage-class specifier */
+%token	CONST RESTRICT VOLATILE
+%token	BOOL CHAR SHORT INT LONG SIGNED UNSIGNED FLOAT DOUBLE VOID
+%token	COMPLEX IMAGINARY	/* IMAGINARY: non-mandated extension */
+%token	DECIMAL32 DECIMAL64 DECIMAL128	/* C23: decimal floating-point types */
+%token	BITINT			/* C23: _BitInt(N) bit-precise integer */
+%token	TYPEOF TYPEOF_UNQUAL	/* C23: typeof / typeof_unqual operators */
+%token	NULLPTR			/* C23: null-pointer constant of type nullptr_t */
+%token	TRUE FALSE		/* C23: boolean keywords */
+%token	STRUCT UNION ENUM ELLIPSIS
+
+%token	CASE DEFAULT IF ELSE SWITCH WHILE DO FOR GOTO CONTINUE BREAK RETURN
+
+%token	ALIGNAS ALIGNOF ATOMIC GENERIC NORETURN STATIC_ASSERT THREAD_LOCAL
+
+%start translation_unit
+%%
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 1  Attributes  (C23)
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Optional attribute-specifier-sequence (empty or present). */
+attribute_specifier_seq_opt
+	: /* empty */
+	| attribute_specifier_sequence
+	;
+
+/* One or more [[...]] specifiers. */
+attribute_specifier_sequence
+	: attribute_specifier
+	| attribute_specifier_sequence attribute_specifier
+	;
+
+/* A single [[ attribute-list ]] */
+attribute_specifier
+	: '[' '[' attribute_list ']' ']'
+	;
+
+/* Zero or more comma-separated attributes, with optional trailing comma. */
+attribute_list
+	: /* empty */
+	| attribute
+	| attribute_list ',' attribute
+	| attribute_list ','		/* trailing comma */
+	;
+
+/* A single attribute token, optionally with arguments. */
+attribute
+	: attribute_token
+	| attribute_token attribute_argument_clause
+	;
+
+/* Standard attribute or namespace-prefixed attribute (e.g. gnu::noinline). */
+attribute_token
+	: IDENTIFIER
+	| IDENTIFIER DC_OP IDENTIFIER
+	;
+
+/* Parenthesised argument list with balanced tokens. */
+attribute_argument_clause
+	: '(' ')'
+	| '(' balanced_token_seq ')'
+	;
+
+/* A sequence of balanced tokens (parentheses/brackets/braces must be paired). */
+balanced_token_seq
+	: balanced_token
+	| balanced_token_seq balanced_token
+	;
+
+/* Any single token, or a nested balanced group. */
+balanced_token
+	: '(' balanced_token_seq ')'
+	| '[' balanced_token_seq ']'
+	| '{' balanced_token_seq '}'
+	| IDENTIFIER
+	| I_CONSTANT
+	| F_CONSTANT
+	| STRING_LITERAL
+	| SIZEOF | ALIGNOF | TYPEOF | TYPEOF_UNQUAL
+	| NULLPTR | TRUE | FALSE
+	| PTR_OP | INC_OP | DEC_OP
+	| LEFT_OP | RIGHT_OP | LE_OP | GE_OP | EQ_OP | NE_OP
+	| AND_OP | OR_OP
+	| MUL_ASSIGN | DIV_ASSIGN | MOD_ASSIGN | ADD_ASSIGN | SUB_ASSIGN
+	| LEFT_ASSIGN | RIGHT_ASSIGN | AND_ASSIGN | XOR_ASSIGN | OR_ASSIGN
+	| DC_OP
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 2  Expressions
+   ───────────────────────────────────────────────────────────────────────────── */
+
+primary_expression
+	: IDENTIFIER
+	| constant
+	| string
+	| '(' expression ')'
+	| generic_selection
+	| NULLPTR			/* C23: null-pointer constant */
+	;
+
+constant
+	: I_CONSTANT		/* includes character_constant */
+	| F_CONSTANT
+	| ENUMERATION_CONSTANT	/* after it has been defined as such */
+	| TRUE			/* C23: boolean keyword */
+	| FALSE			/* C23: boolean keyword */
+	;
+
+enumeration_constant		/* before it has been defined as such */
+	: IDENTIFIER
+	;
+
+string
+	: STRING_LITERAL
+	| FUNC_NAME
+	;
+
+/* C23 6.5.1.1: The controlling operand may be an assignment_expression
+   OR a type_name.  Both forms are now grouped under the new
+   generic_controlling_operand non-terminal. */
+generic_selection
+	: GENERIC '(' generic_controlling_operand ',' generic_assoc_list ')'
+	;
+
+generic_controlling_operand
+	: assignment_expression
+	| type_name
+	;
+
+generic_assoc_list
+	: generic_association
+	| generic_assoc_list ',' generic_association
+	;
+
+generic_association
+	: type_name ':' assignment_expression
+	| DEFAULT ':' assignment_expression
+	;
+
+postfix_expression
+	: primary_expression
+	| postfix_expression '[' expression ']'
+	| postfix_expression '(' ')'
+	| postfix_expression '(' argument_expression_list ')'
+	| postfix_expression '.' IDENTIFIER
+	| postfix_expression PTR_OP IDENTIFIER
+	| postfix_expression INC_OP
+	| postfix_expression DEC_OP
+	| '(' type_name ')' '{' initializer_list '}'
+	| '(' type_name ')' '{' initializer_list ',' '}'
+	| '(' type_name ')' '{' '}'		/* C23: compound literal with empty initializer */
+	/* C23 N3038: compound literal with a storage-class specifier.
+	   Allowed specifiers: static, register, thread_local, constexpr, auto. */
+	| '(' storage_class_specifier type_name ')' '{' initializer_list '}'
+	| '(' storage_class_specifier type_name ')' '{' initializer_list ',' '}'
+	| '(' storage_class_specifier type_name ')' '{' '}'
+	;
+
+argument_expression_list
+	: assignment_expression
+	| argument_expression_list ',' assignment_expression
+	;
+
+unary_expression
+	: postfix_expression
+	| INC_OP unary_expression
+	| DEC_OP unary_expression
+	| unary_operator cast_expression
+	| SIZEOF unary_expression
+	| SIZEOF '(' type_name ')'
+	| ALIGNOF '(' type_name ')'
+	;
+
+unary_operator
+	: '&'
+	| '*'
+	| '+'
+	| '-'
+	| '~'
+	| '!'
+	;
+
+cast_expression
+	: unary_expression
+	| '(' type_name ')' cast_expression
+	;
+
+multiplicative_expression
+	: cast_expression
+	| multiplicative_expression '*' cast_expression
+	| multiplicative_expression '/' cast_expression
+	| multiplicative_expression '%' cast_expression
+	;
+
+additive_expression
+	: multiplicative_expression
+	| additive_expression '+' multiplicative_expression
+	| additive_expression '-' multiplicative_expression
+	;
+
+shift_expression
+	: additive_expression
+	| shift_expression LEFT_OP additive_expression
+	| shift_expression RIGHT_OP additive_expression
+	;
+
+relational_expression
+	: shift_expression
+	| relational_expression '<' shift_expression
+	| relational_expression '>' shift_expression
+	| relational_expression LE_OP shift_expression
+	| relational_expression GE_OP shift_expression
+	;
+
+equality_expression
+	: relational_expression
+	| equality_expression EQ_OP relational_expression
+	| equality_expression NE_OP relational_expression
+	;
+
+and_expression
+	: equality_expression
+	| and_expression '&' equality_expression
+	;
+
+exclusive_or_expression
+	: and_expression
+	| exclusive_or_expression '^' and_expression
+	;
+
+inclusive_or_expression
+	: exclusive_or_expression
+	| inclusive_or_expression '|' exclusive_or_expression
+	;
+
+logical_and_expression
+	: inclusive_or_expression
+	| logical_and_expression AND_OP inclusive_or_expression
+	;
+
+logical_or_expression
+	: logical_and_expression
+	| logical_or_expression OR_OP logical_and_expression
+	;
+
+conditional_expression
+	: logical_or_expression
+	| logical_or_expression '?' expression ':' conditional_expression
+	;
+
+assignment_expression
+	: conditional_expression
+	| unary_expression assignment_operator assignment_expression
+	;
+
+assignment_operator
+	: '='
+	| MUL_ASSIGN
+	| DIV_ASSIGN
+	| MOD_ASSIGN
+	| ADD_ASSIGN
+	| SUB_ASSIGN
+	| LEFT_ASSIGN
+	| RIGHT_ASSIGN
+	| AND_ASSIGN
+	| XOR_ASSIGN
+	| OR_ASSIGN
+	;
+
+expression
+	: assignment_expression
+	| expression ',' assignment_expression
+	;
+
+constant_expression
+	: conditional_expression	/* with constraints */
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 3  Declarations
+   ───────────────────────────────────────────────────────────────────────────── */
+
+declaration
+	: declaration_specifiers ';'
+	| declaration_specifiers init_declarator_list ';'
+	| attribute_specifier_sequence declaration_specifiers ';'
+				/* C23: leading attribute(s), no declarator */
+	| attribute_specifier_sequence declaration_specifiers init_declarator_list ';'
+				/* C23: leading attribute(s) on a declaration */
+	| attribute_specifier_sequence ';'
+				/* C23: standalone attribute declaration (attribute-declaration) */
+	| static_assert_declaration
+	;
+
+declaration_specifiers
+	: storage_class_specifier declaration_specifiers
+	| storage_class_specifier
+	| type_specifier declaration_specifiers
+	| type_specifier
+	| type_qualifier declaration_specifiers
+	| type_qualifier
+	| function_specifier declaration_specifiers
+	| function_specifier
+	| alignment_specifier declaration_specifiers
+	| alignment_specifier
+	;
+
+init_declarator_list
+	: init_declarator
+	| init_declarator_list ',' init_declarator
+	;
+
+init_declarator
+	: declarator '=' initializer
+	| declarator
+	;
+
+storage_class_specifier
+	: TYPEDEF	/* identifiers must be flagged as TYPEDEF_NAME */
+	| EXTERN
+	| STATIC
+	| THREAD_LOCAL
+	| AUTO
+	| REGISTER	/* deprecated in C23: behavior is implementation-defined */
+	| CONSTEXPR	/* C23: object-level constant (may not be applied to functions) */
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 4  Type specifiers
+   ───────────────────────────────────────────────────────────────────────────── */
+
+type_specifier
+	: VOID
+	| CHAR
+	| SHORT
+	| INT
+	| LONG
+	| FLOAT
+	| DOUBLE
+	| SIGNED
+	| UNSIGNED
+	| BOOL
+	| COMPLEX
+	| IMAGINARY		/* non-mandated extension */
+	| DECIMAL32		/* C23: IEEE 754-2008 decimal32 */
+	| DECIMAL64		/* C23: IEEE 754-2008 decimal64 */
+	| DECIMAL128		/* C23: IEEE 754-2008 decimal128 */
+	| BITINT '(' constant_expression ')'
+				/* C23: _BitInt(N) — bit-precise integer of N bits */
+	| typeof_specifier	/* C23: type derived from an expression or type */
+	| atomic_type_specifier
+	| struct_or_union_specifier
+	| enum_specifier
+	| TYPEDEF_NAME		/* after it has been defined as such */
+	;
+
+/* C23: typeof(expression) / typeof(type_name)
+        typeof_unqual(expression) / typeof_unqual(type_name)          */
+typeof_specifier
+	: TYPEOF '(' typeof_specifier_argument ')'
+	| TYPEOF_UNQUAL '(' typeof_specifier_argument ')'
+	;
+
+typeof_specifier_argument
+	: expression
+	| type_name
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 5  Struct / union
+   ───────────────────────────────────────────────────────────────────────────── */
+
+struct_or_union_specifier
+	: struct_or_union attribute_specifier_seq_opt '{' struct_declaration_list '}'
+	| struct_or_union attribute_specifier_seq_opt IDENTIFIER '{' struct_declaration_list '}'
+	| struct_or_union attribute_specifier_seq_opt IDENTIFIER
+	;
+
+struct_or_union
+	: STRUCT
+	| UNION
+	;
+
+struct_declaration_list
+	: struct_declaration
+	| struct_declaration_list struct_declaration
+	;
+
+/* C23 Annex A 6.7.3.1: optional leading attribute-specifier-sequence. */
+struct_declaration
+	: attribute_specifier_seq_opt specifier_qualifier_list ';'
+				/* anonymous struct/union or plain field; C23: optional attr */
+	| attribute_specifier_seq_opt specifier_qualifier_list struct_declarator_list ';'
+	| static_assert_declaration
+	;
+
+/* C23 Annex A 6.7.3.1: alignment_specifier and attribute_specifier_sequence
+   are now valid items in a specifier_qualifier_list (used in struct member
+   declarations and type-name productions).  The attribute form creates an
+   ambiguity with the leading attribute in struct_declaration; Yacc resolves
+   it by preferring shift, which is the correct behaviour. */
+specifier_qualifier_list
+	: type_specifier specifier_qualifier_list
+	| type_specifier
+	| type_qualifier specifier_qualifier_list
+	| type_qualifier
+	| alignment_specifier specifier_qualifier_list	/* C23 */
+	| alignment_specifier				/* C23 */
+	| attribute_specifier_sequence specifier_qualifier_list	/* C23 */
+	| attribute_specifier_sequence			/* C23 */
+	;
+
+struct_declarator_list
+	: struct_declarator
+	| struct_declarator_list ',' struct_declarator
+	;
+
+struct_declarator
+	: ':' constant_expression
+	| declarator ':' constant_expression
+	| declarator
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 6  Enum
+   ───────────────────────────────────────────────────────────────────────────── */
+
+enum_specifier
+	/* C11 forms (no fixed underlying type) */
+	: ENUM attribute_specifier_seq_opt '{' enumerator_list '}'
+	| ENUM attribute_specifier_seq_opt '{' enumerator_list ',' '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER '{' enumerator_list '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER '{' enumerator_list ',' '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER
+	/* C23: fixed underlying type — enum E : int { ... } */
+	| ENUM attribute_specifier_seq_opt ':' specifier_qualifier_list '{' enumerator_list '}'
+	| ENUM attribute_specifier_seq_opt ':' specifier_qualifier_list '{' enumerator_list ',' '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER ':' specifier_qualifier_list '{' enumerator_list '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER ':' specifier_qualifier_list '{' enumerator_list ',' '}'
+	| ENUM attribute_specifier_seq_opt IDENTIFIER ':' specifier_qualifier_list
+	;
+
+enumerator_list
+	: enumerator
+	| enumerator_list ',' enumerator
+	;
+
+enumerator	/* identifiers must be flagged as ENUMERATION_CONSTANT */
+	: enumeration_constant attribute_specifier_seq_opt '=' constant_expression
+				/* C23: attribute on enumerator */
+	| enumeration_constant attribute_specifier_seq_opt
+	;
+
+atomic_type_specifier
+	: ATOMIC '(' type_name ')'
+	;
+
+type_qualifier
+	: CONST
+	| RESTRICT
+	| VOLATILE
+	| ATOMIC
+	;
+
+function_specifier
+	: INLINE
+	| NORETURN	/* deprecated in C23: use [[noreturn]] attribute instead */
+	;
+
+alignment_specifier
+	: ALIGNAS '(' type_name ')'
+	| ALIGNAS '(' constant_expression ')'
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 7  Declarators
+   ───────────────────────────────────────────────────────────────────────────── */
+
+declarator
+	: pointer direct_declarator
+	| direct_declarator
+	;
+
+direct_declarator
+	: IDENTIFIER
+	| '(' declarator ')'
+	| direct_declarator '[' ']'
+	| direct_declarator '[' '*' ']'
+	| direct_declarator '[' STATIC type_qualifier_list assignment_expression ']'
+	| direct_declarator '[' STATIC assignment_expression ']'
+	| direct_declarator '[' type_qualifier_list '*' ']'
+	| direct_declarator '[' type_qualifier_list STATIC assignment_expression ']'
+	| direct_declarator '[' type_qualifier_list assignment_expression ']'
+	| direct_declarator '[' type_qualifier_list ']'
+	| direct_declarator '[' assignment_expression ']'
+	| direct_declarator '(' parameter_type_list ')'
+	| direct_declarator '(' ')'
+	/* C23: K&R-style identifier_list removed — old-style declarations are no longer valid */
+	;
+
+pointer
+	: '*' type_qualifier_list pointer
+	| '*' type_qualifier_list
+	| '*' pointer
+	| '*'
+	;
+
+type_qualifier_list
+	: type_qualifier
+	| type_qualifier_list type_qualifier
+	;
+
+parameter_type_list
+	: parameter_list ',' ELLIPSIS
+	| parameter_list
+	| ELLIPSIS	/* C23: variadic function with no named parameter: void f(...) */
+	;
+
+parameter_list
+	: parameter_declaration
+	| parameter_list ',' parameter_declaration
+	;
+
+parameter_declaration
+	: declaration_specifiers declarator
+	| declaration_specifiers abstract_declarator
+	| declaration_specifiers
+	;
+
+type_name
+	: specifier_qualifier_list abstract_declarator
+	| specifier_qualifier_list
+	;
+
+abstract_declarator
+	: pointer direct_abstract_declarator
+	| pointer
+	| direct_abstract_declarator
+	;
+
+direct_abstract_declarator
+	: '(' abstract_declarator ')'
+	| '[' ']'
+	| '[' '*' ']'
+	| '[' STATIC type_qualifier_list assignment_expression ']'
+	| '[' STATIC assignment_expression ']'
+	| '[' type_qualifier_list STATIC assignment_expression ']'
+	| '[' type_qualifier_list assignment_expression ']'
+	| '[' type_qualifier_list ']'
+	| '[' assignment_expression ']'
+	| direct_abstract_declarator '[' ']'
+	| direct_abstract_declarator '[' '*' ']'
+	| direct_abstract_declarator '[' STATIC type_qualifier_list assignment_expression ']'
+	| direct_abstract_declarator '[' STATIC assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list STATIC assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list ']'
+	| direct_abstract_declarator '[' assignment_expression ']'
+	| '(' ')'
+	| '(' parameter_type_list ')'
+	| direct_abstract_declarator '(' ')'
+	| direct_abstract_declarator '(' parameter_type_list ')'
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 8  Initializers
+   ───────────────────────────────────────────────────────────────────────────── */
+
+initializer
+	: '{' initializer_list '}'
+	| '{' initializer_list ',' '}'
+	| '{' '}'		/* C23: empty initializer (zero-initializes the object) */
+	| assignment_expression
+	;
+
+initializer_list
+	: designation initializer
+	| initializer
+	| initializer_list ',' designation initializer
+	| initializer_list ',' initializer
+	;
+
+designation
+	: designator_list '='
+	;
+
+designator_list
+	: designator
+	| designator_list designator
+	;
+
+designator
+	: '[' constant_expression ']'
+	| '.' IDENTIFIER
+	;
+
+static_assert_declaration
+	: STATIC_ASSERT '(' constant_expression ',' STRING_LITERAL ')' ';'
+	| STATIC_ASSERT '(' constant_expression ')' ';'
+				/* C23: message string is now optional */
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 9  Statements
+   ───────────────────────────────────────────────────────────────────────────── */
+
+statement
+	: labeled_statement
+	| compound_statement
+	| expression_statement
+	| selection_statement
+	| iteration_statement
+	| jump_statement
+	;
+
+/* C23: label is separated into its own non-terminal so that it can also appear
+   as a standalone block_item (preceding a declaration or the closing '}'). */
+label
+	: attribute_specifier_seq_opt IDENTIFIER ':'
+	| attribute_specifier_seq_opt CASE constant_expression ':'
+	| attribute_specifier_seq_opt DEFAULT ':'
+	;
+
+/* labeled_statement: a label immediately followed by a statement.
+   Note: when a label appears at the end of a block or before a declaration,
+   it is reduced as a standalone block_item (see block_item below).
+   The shift/reduce conflict between  label _ statement  is resolved by
+   preferring shift, which produces the expected labeled_statement. */
+labeled_statement
+	: label statement
+	;
+
+compound_statement
+	: '{' '}'
+	| '{' block_item_list '}'
+	;
+
+block_item_list
+	: block_item
+	| block_item_list block_item
+	;
+
+block_item
+	: declaration
+	| statement
+	| label		/* C23: standalone label before a declaration or end of block */
+	;
+
+expression_statement
+	: ';'
+	| expression ';'
+	;
+
+selection_statement
+	: IF '(' expression ')' statement ELSE statement
+	| IF '(' expression ')' statement
+	| SWITCH '(' expression ')' statement
+	;
+
+iteration_statement
+	: WHILE '(' expression ')' statement
+	| DO statement WHILE '(' expression ')' ';'
+	| FOR '(' expression_statement expression_statement ')' statement
+	| FOR '(' expression_statement expression_statement expression ')' statement
+	| FOR '(' declaration expression_statement ')' statement
+	| FOR '(' declaration expression_statement expression ')' statement
+	;
+
+jump_statement
+	: GOTO IDENTIFIER ';'
+	| CONTINUE ';'
+	| BREAK ';'
+	| RETURN ';'
+	| RETURN expression ';'
+	;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   § 10  Translation unit
+   ───────────────────────────────────────────────────────────────────────────── */
+
+translation_unit
+	: external_declaration
+	| translation_unit external_declaration
+	;
+
+external_declaration
+	: function_definition
+	| declaration
+	;
+
+/* C23: K&R-style function definitions removed.
+   The form  declaration_specifiers declarator declaration_list compound_statement
+   (where declaration_list provided parameter types after the declarator) is no
+   longer valid.  Only the prototype form is accepted. */
+function_definition
+	: attribute_specifier_seq_opt declaration_specifiers declarator compound_statement
+	;
+
+%%
+#include <stdio.h>
+
+void yyerror(const char *s)
+{
+	fflush(stdout);
+	fprintf(stderr, "*** %s\n", s);
+}
