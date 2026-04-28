@@ -1,6 +1,6 @@
 # XiaoXuan C Compiler
 
-A clean-room C23 toolchain for the AI agent coding era.
+A clean-room C language toolchain for the AI coding era.
 
 ANCC (XiaoXuan C Compiler) is a long-term effort to build a complete, self-contained C toolchain — compiler, build system, and standard library — designed from first principles for deterministic behavior and strict standard conformance.
 

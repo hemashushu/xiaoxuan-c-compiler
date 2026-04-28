@@ -12,7 +12,7 @@ use ancpp::{
     error::PreprocessFileError,
     memory_file_provider::MemoryFileProvider,
     process_source_file,
-    token::{C23_KEYWORDS, TokenWithLocation},
+    token::{C23_KEYWORD_STRS, TokenWithLocation},
 };
 
 // Help function to process a source file with additional header files and get the preprocess result.
@@ -48,7 +48,7 @@ fn preprocess_with_headers_and_result(
     process_source_file(
         &file_provider,
         &mut file_cache,
-        &C23_KEYWORDS,
+        &C23_KEYWORD_STRS,
         &predefinitions,
         false,
         false,
@@ -74,7 +74,7 @@ fn preprocess_with_headers(
         system_header_files,
     )
     .unwrap()
-    .output
+    .token_with_locations
 }
 
 // Help function to process a source file without any additional header files and get the output tokens.

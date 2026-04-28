@@ -25,7 +25,7 @@
 /// Corresponds to `translation_unit`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranslationUnit {
-    pub declarations: Vec<ExternalDeclaration>,
+    pub external_declarations: Vec<ExternalDeclaration>,
 }
 
 /// A top-level item: either a function definition or a declaration.
@@ -45,7 +45,7 @@ pub enum ExternalDeclaration {
 pub struct FunctionDefinition {
     /// C23: optional attribute-specifier-sequence before the declaration specifiers.
     pub attributes: Vec<Attribute>,
-    pub specifiers: Vec<DeclarationSpecifier>,
+    pub declaration_specifiers: Vec<DeclarationSpecifier>,
     pub declarator: Declarator,
     pub body: Vec<BlockItem>,
 }
@@ -61,9 +61,10 @@ pub enum Declaration {
     Var {
         /// C23: optional leading attributes on the declaration.
         attributes: Vec<Attribute>,
-        specifiers: Vec<DeclarationSpecifier>,
-        declarators: Vec<InitDeclarator>,
+        declaration_specifiers: Vec<DeclarationSpecifier>,
+        init_declarators: Vec<InitDeclarator>,
     },
+    /// `static_assert_declaration`
     StaticAssert(StaticAssert),
     /// C23: standalone attribute declaration — `attribute_specifier_sequence ';'`.
     Attribute(Vec<Attribute>),
@@ -74,8 +75,8 @@ pub enum Declaration {
 /// C23: the message string is now optional (single-argument form).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticAssert {
-    pub expr: Box<Expression>,
-    /// `None` for the C23 single-argument form `_Static_assert(expr);`.
+    pub expression: Box<Expression>,
+    /// `None` for the C23 single-argument form `_Static_assert(expression);`.
     pub message: Option<String>,
 }
 
@@ -142,7 +143,7 @@ pub enum TypeSpecifier {
     Decimal128,
     /// C23: `_BitInt(N)` — bit-precise integer of exactly N bits.
     BitInt(Box<Expression>),
-    /// C23: `typeof(expr-or-type)` and `typeof_unqual(expr-or-type)`.
+    /// C23: `typeof(expression-or-type)` and `typeof_unqual(expression-or-type)`.
     Typeof(TypeofSpecifier),
     /// `ATOMIC '(' type_name ')'`
     Atomic(Box<TypeName>),
@@ -629,7 +630,7 @@ pub enum UnaryOp {
     /// `'&'` — address-of
     AddressOf,
     /// `'*'` — dereference
-    Deref,
+    Dereference,
     /// `'+'` — unary plus
     Plus,
     /// `'-'` — unary minus
@@ -645,33 +646,39 @@ pub enum UnaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     // multiplicative_expression
-    Mul,
-    Div,
-    Mod,
+    Multiply,
+    Divide,
+    Modulo,
+
     // additive_expression
     Add,
-    Sub,
+    Subtract,
+
     // shift_expression
-    Shl,
-    Shr,
+    ShiftLeft,
+    ShiftRight,
+
     // relational_expression
-    Lt,
-    Gt,
-    Le,
-    Ge,
+    LessThan,
+    GreaterThan,
+    LessThanOrEqual,
+    GreaterThanOrEqual,
+
     // equality_expression
-    Eq,
-    Ne,
+    Equal,
+    NotEqual,
+
     // and_expression
-    BitAnd,
+    BitwiseAnd,
     // exclusive_or_expression
-    BitXor,
+    BitwiseXor,
     // inclusive_or_expression
-    BitOr,
+    BitwiseOr,
+
     // logical_and_expression
-    LogAnd,
+    LogicalAnd,
     // logical_or_expression
-    LogOr,
+    LogicalOr,
 }
 
 /// Corresponds to `assignment_operator`.
