@@ -4,7 +4,10 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use ancpp::{
     FILE_NUMBER_SOURCE_FILE_BEGIN,
@@ -43,15 +46,17 @@ fn preprocess_with_headers_and_result(
         file_provider.add_system_file(Path::new(path), content);
     }
 
+    let compile_features = HashMap::new();
+    let suppress_linters = HashSet::new();
     let predefinitions: HashMap<String, String> = HashMap::new();
 
     process_source_file(
         &file_provider,
         &mut file_cache,
         &C23_KEYWORD_STRS,
+        &compile_features,
+        &suppress_linters,
         &predefinitions,
-        false,
-        false,
         FILE_NUMBER_SOURCE_FILE_BEGIN,
         main_file_path,
         project_root.join(main_file_path).as_path(),

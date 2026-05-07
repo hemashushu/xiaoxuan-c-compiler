@@ -4,5 +4,8 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-mod parser;
+pub mod parser;
 pub mod cst;
+
+#[cfg(test)]
+mod parser_test;

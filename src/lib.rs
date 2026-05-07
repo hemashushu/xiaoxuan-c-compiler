@@ -4,9 +4,10 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-mod utils;
-mod indication;
+mod file_position;
 mod frontend;
+mod utils;
 
 pub mod error;
 
+pub use self::frontend::parser::parse;

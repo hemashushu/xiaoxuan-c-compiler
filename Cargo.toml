@@ -10,7 +10,7 @@ keywords = ["c", "compiler", "c23"]
 categories = ["development-tools", "compilers"]
 
 [dependencies]
-ancpp = "1.1.0"
+ancpp = "2.0.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

@@ -16,9 +16,11 @@
 //! optional `_Static_assert` message, labels as standalone block items,
 //! and removal of K&R-style definitions.
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 1  Translation Unit (grammar root)
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Translation Unit (grammar root)
+// ------------------------------------
+
+use ancpp::token::{FloatingPointNumber, IntegerNumber};
 
 /// Root of every compiled C file.
 ///
@@ -45,14 +47,14 @@ pub enum ExternalDeclaration {
 pub struct FunctionDefinition {
     /// C23: optional attribute-specifier-sequence before the declaration specifiers.
     pub attributes: Vec<Attribute>,
-    pub declaration_specifiers: Vec<DeclarationSpecifier>,
-    pub declarator: Declarator,
+    pub declaration_specifiers: Vec<DeclarationSpecifier>, // return type
+    pub declarator: Declarator,                            // name, signature
     pub body: Vec<BlockItem>,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 2  Declarations
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Declarations
+// ------------------------------------
 
 /// Corresponds to `declaration`.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,8 +63,8 @@ pub enum Declaration {
     Var {
         /// C23: optional leading attributes on the declaration.
         attributes: Vec<Attribute>,
-        declaration_specifiers: Vec<DeclarationSpecifier>,
-        init_declarators: Vec<InitDeclarator>,
+        declaration_specifiers: Vec<DeclarationSpecifier>, // type
+        init_declarators: Vec<InitDeclarator>,             // name/shape and initializer
     },
     /// `static_assert_declaration`
     StaticAssert(StaticAssert),
@@ -91,10 +93,6 @@ pub enum InitDeclarator {
     Init(Declarator, Initializer),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 3  Declaration specifiers
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// One specifier in a `declaration_specifiers` list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeclarationSpecifier {
@@ -113,7 +111,6 @@ pub enum StorageClassSpecifier {
     Static,
     ThreadLocal,
     Auto,
-    /// Deprecated in C23; behavior is implementation-defined.
     Register,
     /// C23: `constexpr` — object-level constant (may not be applied to functions).
     Constexpr,
@@ -186,7 +183,7 @@ pub enum TypeQualifier {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionSpecifier {
     Inline,
-    Noreturn,
+    // `Noreturn` is deprecated in C23; use `[[noreturn]]` attribute instead.
 }
 
 /// Corresponds to `alignment_specifier`.
@@ -198,106 +195,9 @@ pub enum AlignmentSpecifier {
     Expression(Box<Expression>),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 4  Struct / union
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Corresponds to `struct_or_union_specifier`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct StructOrUnionSpecifier {
-    pub kind: StructOrUnion,
-    /// C23: optional attributes between the `struct`/`union` keyword and the name or body.
-    pub attributes: Vec<Attribute>,
-    /// Present for named structs/unions.
-    pub name: Option<String>,
-    /// `None` when this is a forward reference (`struct Foo`).
-    pub body: Option<Vec<StructDeclaration>>,
-}
-
-/// Corresponds to `struct_or_union`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum StructOrUnion {
-    Struct,
-    Union,
-}
-
-/// One declaration inside a struct or union body.
-///
-/// Corresponds to `struct_declaration`.
-///
-/// C23 Annex A 6.7.3.1: an optional `attribute_specifier_sequence` may appear
-/// before the `specifier_qualifier_list`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum StructDeclaration {
-    /// `(attribute_specifier_sequence)? specifier_qualifier_list struct_declarator_list? ';'`
-    Field {
-        /// C23: optional leading attributes on the member declaration.
-        attributes: Vec<Attribute>,
-        specifiers: Vec<SpecifierQualifier>,
-        declarators: Vec<StructDeclarator>,
-    },
-    StaticAssert(StaticAssert),
-}
-
-/// One item in a `specifier_qualifier_list`.
-///
-/// C23 Annex A 6.7.3.1 adds `alignment_specifier` and `attribute_specifier_sequence`
-/// as valid items alongside `type_specifier` and `type_qualifier`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SpecifierQualifier {
-    Type(TypeSpecifier),
-    Qualifier(TypeQualifier),
-    /// C23: `alignment_specifier` inside a `specifier_qualifier_list`
-    /// (e.g., `alignas(8) int x;` inside a struct body).
-    Alignment(AlignmentSpecifier),
-    /// C23: `attribute_specifier_sequence` inside a `specifier_qualifier_list`.
-    Attribute(Vec<Attribute>),
-}
-
-/// One declarator inside a struct declaration.
-///
-/// Corresponds to `struct_declarator`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum StructDeclarator {
-    /// `declarator`
-    Plain(Declarator),
-    /// `declarator? ':' constant_expression`  (bit-field)
-    BitField {
-        declarator: Option<Declarator>,
-        width: Box<Expression>,
-    },
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// § 5  Enum
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Corresponds to `enum_specifier`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EnumSpecifier {
-    /// C23: optional attributes between `enum` and the name or body.
-    pub attributes: Vec<Attribute>,
-    pub name: Option<String>,
-    /// C23: fixed underlying type — `enum E : int { … }`.
-    /// `None` for classical (untyped) enumerations.
-    pub underlying_type: Option<Vec<SpecifierQualifier>>,
-    /// `None` for forward references (`enum Color`).
-    pub variants: Option<Vec<Enumerator>>,
-}
-
-/// Corresponds to `enumerator`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Enumerator {
-    pub name: String,
-    /// C23: optional attributes on the enumerator name.
-    pub attributes: Vec<Attribute>,
-    /// Present when `enumeration_constant '=' constant_expression`.
-    pub value: Option<Box<Expression>>,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// § 6  Declarators
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Declarators
+// ------------------------------------
 
 /// Corresponds to `declarator`.
 #[derive(Debug, Clone, PartialEq)]
@@ -389,10 +289,6 @@ pub enum ParameterDeclaration {
     },
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 7  Abstract declarators and type names
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// Corresponds to `type_name`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeName {
@@ -421,9 +317,9 @@ pub enum DirectAbstractDeclarator {
     ),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 8  Initializers
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Initializers
+// ------------------------------------
 
 /// Corresponds to `initializer`.
 #[derive(Debug, Clone, PartialEq)]
@@ -455,262 +351,106 @@ pub enum Designator {
     Member(String),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 9  Expressions
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Struct / union
+// ------------------------------------
 
-/// Corresponds to the entire expression hierarchy from `primary_expression` up through `expression`:
-///
-/// - `primary_expression` (identifiers, constants, string literals, generic selections)
-/// - `postfix_expression` (calls, member access, array subscripting, etc.)
-/// - `unary_expression` (prefix operators, sizeof, alignof, `++`/`--` before the operand, etc.)
-/// - `cast_expression` (type casts `(T)expression`)
-/// - `binary_expression` (all binary operators, with precedence levels folded in)
-///   - `multiplicative_expression` (`*`, `/`, `%`)
-///   - `additive_expression` (`+`, `-`)
-///   - `shift_expression` (`<<`, `>>`)
-///   - `relational_expression` (`<`, `>`, `<=`, `>=`)
-///   - `equality_expression` (`==`, `!=`)
-///   - `and_expression` (`&`)
-///   - `exclusive_or_expression` (`^`)
-///   - `inclusive_or_expression` (`|`)
-///   - `logical_and_expression`
-///   - `logical_or_expression`
-/// - `conditional_expression` (ternary `?:`)
-/// - `assignment_expression` (`conditional_expression` | `unary_expression assignment_operator assignment_expression`)
-/// - `expression` (comma operator)
-///
-/// Binary expression precedence levels (multiplicative … logical-or)
-/// are folded into `Binary { op, lhs, rhs }` to reduce indirection;
-/// the parser is responsible for building the tree in the correct shape.
+/// Corresponds to `struct_or_union_specifier`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expression {
-    // ── primary ────────────────────────────────────────────────────────────
-    /// `IDENTIFIER`
-    Identifier(String),
-    /// `I_CONSTANT | F_CONSTANT | character_constant | ENUMERATION_CONSTANT | true | false`
-    Constant(Constant),
-    /// `STRING_LITERAL | FUNC_NAME`
-    String(StringLiteral),
-    /// `GENERIC '(' assignment_expression ',' generic_assoc_list ')'`
-    Generic(Box<GenericSelection>),
-    /// C23: `nullptr` — null-pointer constant of type `nullptr_t`.
-    Nullptr,
+pub struct StructOrUnionSpecifier {
+    pub kind: StructOrUnion,
+    /// C23: optional attributes between the `struct`/`union` keyword and the name or body.
+    pub attributes: Vec<Attribute>,
+    /// Present for named structs/unions.
+    pub name: Option<String>,
+    /// `None` when this is a forward reference (`struct Foo`).
+    pub body: Option<Vec<StructDeclaration>>,
+}
 
-    // ── postfix ────────────────────────────────────────────────────────────
-    /// `postfix_expression '[' expression ']'`
-    Index(Box<Expression>, Box<Expression>),
-    /// `postfix_expression '(' argument_expression_list? ')'`
-    Call(Box<Expression>, Vec<Expression>),
-    /// `postfix_expression '.' IDENTIFIER`
-    Member(Box<Expression>, String),
-    /// `postfix_expression PTR_OP IDENTIFIER`
-    ArrowMember(Box<Expression>, String),
-    /// `postfix_expression INC_OP`
-    PostIncrement(Box<Expression>),
-    /// `postfix_expression DEC_OP`
-    PostDecrement(Box<Expression>),
-    /// C23 N3038: `'(' (storage_class_specifier)? type_name ')' '{' items? '}'`
-    ///
-    /// A storage-class specifier may appear before the type name inside the
-    /// parentheses.  Allowed specifiers: `static`, `register`, `thread_local`,
-    /// `constexpr`, `auto`.  The standard validates this combination
-    /// semantically; the grammar accepts any `storage_class_specifier`.
-    CompoundLiteral {
-        /// C23 N3038: optional storage class inside `( )`. `None` for the
-        /// classic `(T){ … }` form that was valid since C99.
-        storage: Option<StorageClassSpecifier>,
-        type_name: TypeName,
-        /// Items from the initializer list; empty when using `= {}`.
-        items: Vec<InitializerItem>,
+/// Corresponds to `struct_or_union`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructOrUnion {
+    Struct,
+    Union,
+}
+
+/// One declaration inside a struct or union body.
+///
+/// Corresponds to `struct_declaration`.
+///
+/// C23 Annex A 6.7.3.1: an optional `attribute_specifier_sequence` may appear
+/// before the `specifier_qualifier_list`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructDeclaration {
+    /// `(attribute_specifier_sequence)? specifier_qualifier_list struct_declarator_list? ';'`
+    Field {
+        /// C23: optional leading attributes on the member declaration.
+        attributes: Vec<Attribute>,
+        specifiers: Vec<SpecifierQualifier>,
+        declarators: Vec<StructDeclarator>,
     },
-
-    // ── unary ──────────────────────────────────────────────────────────────
-    /// `INC_OP unary_expression`
-    PreIncrement(Box<Expression>),
-    /// `DEC_OP unary_expression`
-    PreDecrement(Box<Expression>),
-    /// `unary_operator cast_expression`
-    Unary(UnaryOp, Box<Expression>),
-    /// `SIZEOF unary_expression` or `SIZEOF '(' type_name ')'`
-    Sizeof(SizeofOperand),
-    /// `ALIGNOF '(' type_name ')'`
-    Alignof(TypeName),
-
-    // ── cast ───────────────────────────────────────────────────────────────
-    /// `'(' type_name ')' cast_expression`
-    Cast(TypeName, Box<Expression>),
-
-    // ── binary (all precedence levels) ─────────────────────────────────────
-    Binary(BinaryOp, Box<Expression>, Box<Expression>),
-
-    // ── conditional ────────────────────────────────────────────────────────
-    /// `logical_or_expression '?' expression ':' conditional_expression`
-    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
-
-    // ── assignment ─────────────────────────────────────────────────────────
-    /// `unary_expression assignment_operator assignment_expression`
-    Assign(AssignOp, Box<Expression>, Box<Expression>),
-
-    // ── comma ──────────────────────────────────────────────────────────────
-    /// `expression ',' assignment_expression`
-    /// It is recommended that only use comma operators in the `for` loop initializer and step expressions,
-    /// but the grammar allows them anywhere.
-    Comma(Box<Expression>, Box<Expression>),
+    StaticAssert(StaticAssert),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 10  Leaf / operator enums used by Expression
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Corresponds to `constant`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Constant {
-    /// `I_CONSTANT` (integer literal, including character constants).
-    Integer(String),
-    /// `F_CONSTANT` (floating-point literal).
-    Float(String),
-    /// `ENUMERATION_CONSTANT`
-    Enumeration(String),
-    /// C23: `true` or `false` keywords (boolean constants).
-    Bool(bool),
-}
-
-/// Corresponds to `string`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum StringLiteral {
-    /// `STRING_LITERAL` (may be the result of concatenation).
-    Literal(String),
-    /// `FUNC_NAME` (`__func__`).
-    FuncName,
-}
-
-/// Corresponds to `generic_selection`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenericSelection {
-    /// C23: the controlling operand may be an expression or a type name.
-    pub controlling: GenericControlling,
-    pub associations: Vec<GenericAssociation>,
-}
-
-/// The controlling operand of a `_Generic` selection expression.
+/// One item in a `specifier_qualifier_list`.
 ///
-/// Corresponds to `generic_controlling_operand` in the C23 grammar (6.5.1.1).
-/// In C11 only an `assignment_expression` was valid; C23 also allows a bare
-/// type name, enabling patterns like `_Generic(int, int: "int", ...)`.
+/// C23 Annex A 6.7.3.1 adds `alignment_specifier` and `attribute_specifier_sequence`
+/// as valid items alongside `type_specifier` and `type_qualifier`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum GenericControlling {
-    /// `assignment_expression` (valid since C11)
-    Expression(Box<Expression>),
-    /// C23: type-name as the controlling operand.
-    Type(TypeName),
+pub enum SpecifierQualifier {
+    Type(TypeSpecifier),
+    Qualifier(TypeQualifier),
+    /// C23: `alignment_specifier` inside a `specifier_qualifier_list`
+    /// (e.g., `alignas(8) int x;` inside a struct body).
+    Alignment(AlignmentSpecifier),
+    /// C23: `attribute_specifier_sequence` inside a `specifier_qualifier_list`.
+    Attribute(Vec<Attribute>),
 }
 
-/// Corresponds to `generic_association`.
+/// One declarator inside a struct declaration.
+///
+/// Corresponds to `struct_declarator`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum GenericAssociation {
-    /// `type_name ':' assignment_expression`
-    Type(TypeName, Box<Expression>),
-    /// `DEFAULT ':' assignment_expression`
-    Default(Box<Expression>),
+pub enum StructDeclarator {
+    /// `declarator`
+    Plain(Declarator),
+    /// `declarator? ':' constant_expression`  (bit-field)
+    BitField {
+        declarator: Option<Declarator>,
+        width: Box<Expression>,
+    },
 }
 
-/// The operand of a `sizeof` expression.
+// ------------------------------------
+// Enum
+// ------------------------------------
+
+/// Corresponds to `enum_specifier`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SizeofOperand {
-    /// `sizeof unary_expression`
-    Expression(Box<Expression>),
-    /// `sizeof '(' type_name ')'`
-    Type(TypeName),
+pub struct EnumSpecifier {
+    /// C23: optional attributes between `enum` and the name or body.
+    pub attributes: Vec<Attribute>,
+    pub name: Option<String>,
+    /// C23: fixed underlying type — `enum E : int { … }`.
+    /// `None` for classical (untyped) enumerations.
+    pub underlying_type: Option<Vec<SpecifierQualifier>>,
+    /// `None` for forward references (`enum Color`).
+    pub variants: Option<Vec<Enumerator>>,
 }
 
-/// Corresponds to `unary_operator`.
+/// Corresponds to `enumerator`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum UnaryOp {
-    /// `'&'` — address-of
-    AddressOf,
-    /// `'*'` — dereference
-    Dereference,
-    /// `'+'` — unary plus
-    Plus,
-    /// `'-'` — unary minus
-    Minus,
-    /// `'~'` — bitwise NOT
-    BitwiseNot,
-    /// `'!'` — logical NOT
-    LogicalNot,
+pub struct Enumerator {
+    pub name: String,
+    /// C23: optional attributes on the enumerator name.
+    pub attributes: Vec<Attribute>,
+    /// Present when `enumeration_constant '=' constant_expression`.
+    pub value: Option<Box<Expression>>,
 }
 
-/// All binary operators, spanning every precedence level from
-/// multiplicative through logical-or.
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinaryOp {
-    // multiplicative_expression
-    Multiply,
-    Divide,
-    Modulo,
-
-    // additive_expression
-    Add,
-    Subtract,
-
-    // shift_expression
-    ShiftLeft,
-    ShiftRight,
-
-    // relational_expression
-    LessThan,
-    GreaterThan,
-    LessThanOrEqual,
-    GreaterThanOrEqual,
-
-    // equality_expression
-    Equal,
-    NotEqual,
-
-    // and_expression
-    BitwiseAnd,
-    // exclusive_or_expression
-    BitwiseXor,
-    // inclusive_or_expression
-    BitwiseOr,
-
-    // logical_and_expression
-    LogicalAnd,
-    // logical_or_expression
-    LogicalOr,
-}
-
-/// Corresponds to `assignment_operator`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AssignOp {
-    /// `'='`
-    Assign,
-    /// `'*='`
-    MulAssign,
-    /// `'/='`
-    DivAssign,
-    /// `'%='`
-    ModAssign,
-    /// `'+='`
-    AddAssign,
-    /// `'-='`
-    SubAssign,
-    /// `'<<='`
-    ShlAssign,
-    /// `'>>='`
-    ShrAssign,
-    /// `'&='`
-    AndAssign,
-    /// `'^='`
-    XorAssign,
-    /// `'|='`
-    OrAssign,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// § 11  Statements
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Statements
+// ------------------------------------
 
 /// Corresponds to `statement`.
 #[derive(Debug, Clone, PartialEq)]
@@ -837,9 +577,258 @@ pub enum JumpStatement {
     Return(Option<Box<Expression>>),
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// § 0  Attributes  (C23)
-// ─────────────────────────────────────────────────────────────────────────────
+// ------------------------------------
+// Expressions
+// ------------------------------------
+
+/// Corresponds to the entire expression hierarchy from `primary_expression` up through `expression`:
+///
+/// - `primary_expression` (identifiers, constants, string literals, generic selections)
+/// - `postfix_expression` (calls, member access, array subscripting, etc.)
+/// - `unary_expression` (prefix operators, sizeof, alignof, `++`/`--` before the operand, etc.)
+/// - `cast_expression` (type casts `(T)expression`)
+/// - `binary_expression` (all binary operators, with precedence levels folded in)
+///   - `multiplicative_expression` (`*`, `/`, `%`)
+///   - `additive_expression` (`+`, `-`)
+///   - `shift_expression` (`<<`, `>>`)
+///   - `relational_expression` (`<`, `>`, `<=`, `>=`)
+///   - `equality_expression` (`==`, `!=`)
+///   - `and_expression` (`&`)
+///   - `exclusive_or_expression` (`^`)
+///   - `inclusive_or_expression` (`|`)
+///   - `logical_and_expression`
+///   - `logical_or_expression`
+/// - `conditional_expression` (ternary `?:`)
+/// - `assignment_expression` (`conditional_expression` | `unary_expression assignment_operator assignment_expression`)
+/// - `expression` (comma operator)
+///
+/// Binary expression precedence levels (multiplicative … logical-or)
+/// are folded into `Binary { op, lhs, rhs }` to reduce indirection;
+/// the parser is responsible for building the tree in the correct shape.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expression {
+    // ── primary ────────────────────────────────────────────────────────────
+    /// `IDENTIFIER`
+    Identifier(String),
+    /// `I_CONSTANT | F_CONSTANT | character_constant | ENUMERATION_CONSTANT | true | false`
+    Constant(Constant),
+    /// `STRING_LITERAL | FUNC_NAME`
+    String(StringLiteral),
+    /// `GENERIC '(' assignment_expression ',' generic_assoc_list ')'`
+    Generic(Box<GenericSelection>),
+    /// C23: `nullptr` — null-pointer constant of type `nullptr_t`.
+    Nullptr,
+
+    // ── postfix ────────────────────────────────────────────────────────────
+    /// `postfix_expression '[' expression ']'`
+    Index(Box<Expression>, Box<Expression>),
+    /// `postfix_expression '(' argument_expression_list? ')'`
+    Call(Box<Expression>, Vec<Expression>),
+    /// `postfix_expression '.' IDENTIFIER`
+    Member(Box<Expression>, String),
+    /// `postfix_expression PTR_OP IDENTIFIER`
+    ArrowMember(Box<Expression>, String),
+    /// `postfix_expression INC_OP`
+    PostIncrement(Box<Expression>),
+    /// `postfix_expression DEC_OP`
+    PostDecrement(Box<Expression>),
+    /// C23 N3038: `'(' (storage_class_specifier)? type_name ')' '{' items? '}'`
+    ///
+    /// A storage-class specifier may appear before the type name inside the
+    /// parentheses.  Allowed specifiers: `static`, `register`, `thread_local`,
+    /// `constexpr`, `auto`.  The standard validates this combination
+    /// semantically; the grammar accepts any `storage_class_specifier`.
+    CompoundLiteral {
+        /// C23 N3038: optional storage class inside `( )`. `None` for the
+        /// classic `(T){ … }` form that was valid since C99.
+        storage: Option<StorageClassSpecifier>,
+        type_name: TypeName,
+        /// Items from the initializer list; empty when using `= {}`.
+        items: Vec<InitializerItem>,
+    },
+
+    // ── unary ──────────────────────────────────────────────────────────────
+    /// `INC_OP unary_expression`
+    PreIncrement(Box<Expression>),
+    /// `DEC_OP unary_expression`
+    PreDecrement(Box<Expression>),
+    /// `unary_operator cast_expression`
+    Unary(UnaryOp, Box<Expression>),
+    /// `SIZEOF unary_expression` or `SIZEOF '(' type_name ')'`
+    Sizeof(SizeofOperand),
+    /// `ALIGNOF '(' type_name ')'`
+    Alignof(TypeName),
+
+    // ── cast ───────────────────────────────────────────────────────────────
+    /// `'(' type_name ')' cast_expression`
+    Cast(TypeName, Box<Expression>),
+
+    // ── binary (all precedence levels) ─────────────────────────────────────
+    Binary(BinaryOp, Box<Expression>, Box<Expression>),
+
+    // ── conditional ────────────────────────────────────────────────────────
+    /// `logical_or_expression '?' expression ':' conditional_expression`
+    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
+
+    // ── assignment ─────────────────────────────────────────────────────────
+    /// `unary_expression assignment_operator assignment_expression`
+    Assign(AssignOp, Box<Expression>, Box<Expression>),
+
+    // ── comma ──────────────────────────────────────────────────────────────
+    /// `expression ',' assignment_expression`
+    /// It is recommended that only use comma operators in the `for` loop initializer and step expressions,
+    /// but the grammar allows them anywhere.
+    Comma(Box<Expression>, Box<Expression>),
+}
+
+/// Corresponds to `constant`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Constant {
+    /// `I_CONSTANT` (integer literal, including character constants).
+    Integer(IntegerNumber),
+    /// `F_CONSTANT` (floating-point literal).
+    Float(FloatingPointNumber),
+    /// `ENUMERATION_CONSTANT`
+    Enumeration(String),
+    /// C23: `true` or `false` keywords (boolean constants).
+    Bool(bool),
+}
+
+/// Corresponds to `string`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringLiteral {
+    /// `STRING_LITERAL` (may be the result of concatenation).
+    Literal(String),
+    /// `FUNC_NAME` (`__func__`).
+    FuncName,
+}
+
+/// Corresponds to `generic_selection`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericSelection {
+    /// C23: the controlling operand may be an expression or a type name.
+    pub controlling: GenericControlling,
+    pub associations: Vec<GenericAssociation>,
+}
+
+/// The controlling operand of a `_Generic` selection expression.
+///
+/// Corresponds to `generic_controlling_operand` in the C23 grammar (6.5.1.1).
+/// In C11 only an `assignment_expression` was valid; C23 also allows a bare
+/// type name, enabling patterns like `_Generic(int, int: "int", ...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenericControlling {
+    /// `assignment_expression` (valid since C11)
+    Expression(Box<Expression>),
+    /// C23: type-name as the controlling operand.
+    Type(TypeName),
+}
+
+/// Corresponds to `generic_association`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenericAssociation {
+    /// `type_name ':' assignment_expression`
+    Type(TypeName, Box<Expression>),
+    /// `DEFAULT ':' assignment_expression`
+    Default(Box<Expression>),
+}
+
+/// The operand of a `sizeof` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SizeofOperand {
+    /// `sizeof unary_expression`
+    Expression(Box<Expression>),
+    /// `sizeof '(' type_name ')'`
+    Type(TypeName),
+}
+
+/// Corresponds to `unary_operator`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnaryOp {
+    /// `'&'` — address-of
+    AddressOf,
+    /// `'*'` — dereference
+    Dereference,
+    /// `'+'` — unary plus
+    Plus,
+    /// `'-'` — unary minus
+    Minus,
+    /// `'~'` — bitwise NOT
+    BitwiseNot,
+    /// `'!'` — logical NOT
+    LogicalNot,
+}
+
+/// All binary operators, spanning every precedence level from
+/// multiplicative through logical-or.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinaryOp {
+    // multiplicative_expression
+    Multiply,
+    Divide,
+    Modulo,
+
+    // additive_expression
+    Add,
+    Subtract,
+
+    // shift_expression
+    ShiftLeft,
+    ShiftRight,
+
+    // relational_expression
+    LessThan,
+    GreaterThan,
+    LessThanOrEqual,
+    GreaterThanOrEqual,
+
+    // equality_expression
+    Equal,
+    NotEqual,
+
+    // and_expression
+    BitwiseAnd,
+    // exclusive_or_expression
+    BitwiseXor,
+    // inclusive_or_expression
+    BitwiseOr,
+
+    // logical_and_expression
+    LogicalAnd,
+    // logical_or_expression
+    LogicalOr,
+}
+
+/// Corresponds to `assignment_operator`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignOp {
+    /// `'='`
+    Assign,
+    /// `'*='`
+    MultiplyAssign,
+    /// `'/='`
+    DivideAssign,
+    /// `'%='`
+    ModuloAssign,
+    /// `'+='`
+    AddAssign,
+    /// `'-='`
+    SubtractAssign,
+    /// `'<<='`
+    ShiftLeftAssign,
+    /// `'>>='`
+    ShiftRightAssign,
+    /// `'&='`
+    AndAssign,
+    /// `'^='`
+    XorAssign,
+    /// `'|='`
+    OrAssign,
+}
+
+// ------------------------------------
+// Attributes  (C23)
+// ------------------------------------
 
 /// A single attribute entry inside an `[[...]]` specifier.
 ///
