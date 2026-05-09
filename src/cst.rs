@@ -10,7 +10,7 @@
 //! Binary expression precedence levels are collapsed into a single [`BinaryOp`] enum
 //! to avoid deeply nested indirection; the parser is responsible for enforcing precedence.
 //!
-//! C23 additions over C11: attributes (`[[…]]`), `constexpr` storage class, `nullptr`,
+//! C23 additions over C11: attributes (`[[...]]`), `constexpr` storage class, `nullptr`,
 //! `true`/`false` keywords, `typeof`/`typeof_unqual`, `_BitInt(N)`,
 //! `_Decimal32/64/128`, fixed-underlying-type enums, empty initializer `= {}`,
 //! optional `_Static_assert` message, labels as standalone block items,
@@ -22,12 +22,50 @@
 
 use ancpp::token::{FloatingPointNumber, IntegerNumber};
 
+use crate::file_position::FilePosition;
+
+// ------------------------------------
+// Spanned wrapper
+// ------------------------------------
+
+/// A CST/AST node together with the source position of its first token.
+///
+/// `pos` always points to the first token that opens the construct, e.g.:
+/// - For `return 1+2;` the `pos` of the `JumpStatement::Return` variant is the `return` token.
+/// - For the binary expression `1+2` the `pos` is the `1` token.
+///
+/// Use the type aliases [`Expr`], [`Stmt`], [`Decl`], and [`ExtDecl`] to refer to
+/// the spanned versions of the four major node kinds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub pos: FilePosition,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(node: T, pos: FilePosition) -> Self {
+        Self { node, pos }
+    }
+}
+
+/// A spanned [`Expression`] node — the primary unit of position tracking.
+pub type Expr = Spanned<Expression>;
+
+/// A spanned [`Statement`] node.
+pub type Stmt = Spanned<Statement>;
+
+/// A spanned [`Declaration`] node.
+pub type Decl = Spanned<Declaration>;
+
+/// A spanned [`ExternalDeclaration`] node.
+pub type ExtDecl = Spanned<ExternalDeclaration>;
+
 /// Root of every compiled C file.
 ///
 /// Corresponds to `translation_unit`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranslationUnit {
-    pub external_declarations: Vec<ExternalDeclaration>,
+    pub external_declarations: Vec<ExtDecl>,
 }
 
 /// A top-level item: either a function definition or a declaration.
@@ -77,7 +115,7 @@ pub enum Declaration {
 /// C23: the message string is now optional (single-argument form).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticAssert {
-    pub expression: Box<Expression>,
+    pub expression: Box<Expr>,
     /// `None` for the C23 single-argument form `_Static_assert(expression);`.
     pub message: Option<String>,
 }
@@ -139,7 +177,7 @@ pub enum TypeSpecifier {
     /// C23: `_Decimal128` (IEEE 754-2008 decimal128).
     Decimal128,
     /// C23: `_BitInt(N)` — bit-precise integer of exactly N bits.
-    BitInt(Box<Expression>),
+    BitInt(Box<Expr>),
     /// C23: `typeof(expression-or-type)` and `typeof_unqual(expression-or-type)`.
     Typeof(TypeofSpecifier),
     /// `ATOMIC '(' type_name ')'`
@@ -153,14 +191,14 @@ pub enum TypeSpecifier {
 /// Operand of the C23 `typeof` / `typeof_unqual` type specifier.
 ///
 /// Corresponds to `typeof_specifier` in the C23 grammar.
-/// When `unqual` is `true` the specifier was written as `typeof_unqual(…)`,
+/// When `unqual` is `true` the specifier was written as `typeof_unqual(...)`,
 /// which strips all top-level qualifiers from the resulting type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeofSpecifier {
     /// `typeof(expression)` or `typeof_unqual(expression)`.
     Expression {
         unqual: bool,
-        expression: Box<Expression>,
+        expression: Box<Expr>,
     },
     /// `typeof(type_name)` or `typeof_unqual(type_name)`.
     Type {
@@ -192,7 +230,7 @@ pub enum AlignmentSpecifier {
     /// `ALIGNAS '(' type_name ')'`
     Type(Box<TypeName>),
     /// `ALIGNAS '(' constant_expression ')'`
-    Expression(Box<Expression>),
+    Expression(Box<Expr>),
 }
 
 // ------------------------------------
@@ -239,16 +277,16 @@ pub enum ArraySize {
     /// but semantically they are the same.
     Static {
         qualifiers: Vec<TypeQualifier>,
-        size: Box<Expression>,
+        size: Box<Expr>,
     },
     /// `[type_qualifier_list]`  or  `[type_qualifier_list assignment_expression]`
     Qualified {
         qualifiers: Vec<TypeQualifier>,
         /// `None` when only qualifiers are present (no size expression).
-        size: Option<Box<Expression>>,
+        size: Option<Box<Expr>>,
     },
     /// `[assignment_expression]`
-    Expression(Box<Expression>),
+    Expression(Box<Expr>),
 }
 
 /// The parameter/identifier portion of a function declarator.
@@ -325,7 +363,7 @@ pub enum DirectAbstractDeclarator {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Initializer {
     /// A single expression: `assignment_expression`.
-    Expression(Box<Expression>),
+    Expression(Box<Expr>),
     /// A brace-enclosed list: `'{' initializer_list ','? '}'`.
     List(Vec<InitializerItem>),
     /// C23: empty initializer `= {}` — zero-initializes the entire object.
@@ -346,7 +384,7 @@ pub struct InitializerItem {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Designator {
     /// `'[' constant_expression ']'`
-    Index(Box<Expression>),
+    Index(Box<Expr>),
     /// `'.' IDENTIFIER`
     Member(String),
 }
@@ -417,7 +455,7 @@ pub enum StructDeclarator {
     /// `declarator? ':' constant_expression`  (bit-field)
     BitField {
         declarator: Option<Declarator>,
-        width: Box<Expression>,
+        width: Box<Expr>,
     },
 }
 
@@ -431,7 +469,7 @@ pub struct EnumSpecifier {
     /// C23: optional attributes between `enum` and the name or body.
     pub attributes: Vec<Attribute>,
     pub name: Option<String>,
-    /// C23: fixed underlying type — `enum E : int { … }`.
+    /// C23: fixed underlying type — `enum E : int { ... }`.
     /// `None` for classical (untyped) enumerations.
     pub underlying_type: Option<Vec<SpecifierQualifier>>,
     /// `None` for forward references (`enum Color`).
@@ -445,7 +483,7 @@ pub struct Enumerator {
     /// C23: optional attributes on the enumerator name.
     pub attributes: Vec<Attribute>,
     /// Present when `enumeration_constant '=' constant_expression`.
-    pub value: Option<Box<Expression>>,
+    pub value: Option<Box<Expr>>,
 }
 
 // ------------------------------------
@@ -461,7 +499,7 @@ pub enum Statement {
     Compound(Vec<BlockItem>),
 
     // `;` (empty statement) or `expression ';'`
-    Expression(Option<Expression>),
+    Expression(Option<Expr>),
 
     // `if` / `switch`
     Selection(Box<SelectionStatement>),
@@ -490,7 +528,7 @@ pub enum LabelKind {
     /// `IDENTIFIER ':'`
     Named(String),
     /// `CASE constant_expression ':'`
-    Case(Box<Expression>),
+    Case(Box<Expr>),
     /// `DEFAULT ':'`
     Default,
 }
@@ -501,7 +539,7 @@ pub enum LabelKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabeledStatement {
     pub label: Label,
-    pub statement: Box<Statement>,
+    pub statement: Box<Stmt>,
 }
 
 /// One item in a `block_item_list`.
@@ -510,8 +548,8 @@ pub struct LabeledStatement {
 /// end of a compound statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockItem {
-    Declaration(Declaration),
-    Statement(Statement),
+    Declaration(Decl),
+    Statement(Stmt),
     /// C23: a label not immediately followed by a statement in the same block item
     /// (e.g. a label before a declaration, or immediately before `}`).
     Label(Label),
@@ -522,14 +560,14 @@ pub enum BlockItem {
 pub enum SelectionStatement {
     /// `IF '(' expression ')' statement (ELSE statement)?`
     If {
-        cond: Box<Expression>,
-        then: Box<Statement>,
-        else_: Option<Box<Statement>>,
+        cond: Box<Expr>,
+        then: Box<Stmt>,
+        else_: Option<Box<Stmt>>,
     },
     /// `SWITCH '(' expression ')' statement`
     Switch {
-        cond: Box<Expression>,
-        body: Box<Statement>,
+        cond: Box<Expr>,
+        body: Box<Stmt>,
     },
 }
 
@@ -538,20 +576,20 @@ pub enum SelectionStatement {
 pub enum IterationStatement {
     /// `WHILE '(' expression ')' statement`
     While {
-        cond: Box<Expression>,
-        body: Box<Statement>,
+        cond: Box<Expr>,
+        body: Box<Stmt>,
     },
     /// `DO statement WHILE '(' expression ')' ';'`
     DoWhile {
-        body: Box<Statement>,
-        cond: Box<Expression>,
+        body: Box<Stmt>,
+        cond: Box<Expr>,
     },
     /// `FOR '(' for_init expression_statement expression? ')' statement`
     For {
         init: ForInit,
-        cond: Option<Box<Expression>>,
-        step: Option<Box<Expression>>,
-        body: Box<Statement>,
+        cond: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+        body: Box<Stmt>,
     },
 }
 
@@ -559,9 +597,9 @@ pub enum IterationStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForInit {
     /// `expression_statement` (may be empty)
-    Expression(Option<Expression>),
+    Expression(Option<Expr>),
     /// `declaration`
-    Declaration(Declaration),
+    Declaration(Decl),
 }
 
 /// Corresponds to `jump_statement`.
@@ -574,7 +612,7 @@ pub enum JumpStatement {
     /// `BREAK ';'`
     Break,
     /// `RETURN expression? ';'`
-    Return(Option<Box<Expression>>),
+    Return(Option<Box<Expr>>),
 }
 
 // ------------------------------------
@@ -602,7 +640,7 @@ pub enum JumpStatement {
 /// - `assignment_expression` (`conditional_expression` | `unary_expression assignment_operator assignment_expression`)
 /// - `expression` (comma operator)
 ///
-/// Binary expression precedence levels (multiplicative … logical-or)
+/// Binary expression precedence levels (multiplicative ... logical-or)
 /// are folded into `Binary { op, lhs, rhs }` to reduce indirection;
 /// the parser is responsible for building the tree in the correct shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -621,17 +659,17 @@ pub enum Expression {
 
     // ── postfix ────────────────────────────────────────────────────────────
     /// `postfix_expression '[' expression ']'`
-    Index(Box<Expression>, Box<Expression>),
+    Index(Box<Expr>, Box<Expr>),
     /// `postfix_expression '(' argument_expression_list? ')'`
-    Call(Box<Expression>, Vec<Expression>),
+    Call(Box<Expr>, Vec<Expr>),
     /// `postfix_expression '.' IDENTIFIER`
-    Member(Box<Expression>, String),
+    Member(Box<Expr>, String),
     /// `postfix_expression PTR_OP IDENTIFIER`
-    ArrowMember(Box<Expression>, String),
+    ArrowMember(Box<Expr>, String),
     /// `postfix_expression INC_OP`
-    PostIncrement(Box<Expression>),
+    PostIncrement(Box<Expr>),
     /// `postfix_expression DEC_OP`
-    PostDecrement(Box<Expression>),
+    PostDecrement(Box<Expr>),
     /// C23 N3038: `'(' (storage_class_specifier)? type_name ')' '{' items? '}'`
     ///
     /// A storage-class specifier may appear before the type name inside the
@@ -640,7 +678,7 @@ pub enum Expression {
     /// semantically; the grammar accepts any `storage_class_specifier`.
     CompoundLiteral {
         /// C23 N3038: optional storage class inside `( )`. `None` for the
-        /// classic `(T){ … }` form that was valid since C99.
+        /// classic `(T){ ... }` form that was valid since C99.
         storage: Option<StorageClassSpecifier>,
         type_name: TypeName,
         /// Items from the initializer list; empty when using `= {}`.
@@ -649,11 +687,11 @@ pub enum Expression {
 
     // ── unary ──────────────────────────────────────────────────────────────
     /// `INC_OP unary_expression`
-    PreIncrement(Box<Expression>),
+    PreIncrement(Box<Expr>),
     /// `DEC_OP unary_expression`
-    PreDecrement(Box<Expression>),
+    PreDecrement(Box<Expr>),
     /// `unary_operator cast_expression`
-    Unary(UnaryOp, Box<Expression>),
+    Unary(UnaryOp, Box<Expr>),
     /// `SIZEOF unary_expression` or `SIZEOF '(' type_name ')'`
     Sizeof(SizeofOperand),
     /// `ALIGNOF '(' type_name ')'`
@@ -661,24 +699,24 @@ pub enum Expression {
 
     // ── cast ───────────────────────────────────────────────────────────────
     /// `'(' type_name ')' cast_expression`
-    Cast(TypeName, Box<Expression>),
+    Cast(TypeName, Box<Expr>),
 
     // ── binary (all precedence levels) ─────────────────────────────────────
-    Binary(BinaryOp, Box<Expression>, Box<Expression>),
+    Binary(BinaryOp, Box<Expr>, Box<Expr>),
 
     // ── conditional ────────────────────────────────────────────────────────
     /// `logical_or_expression '?' expression ':' conditional_expression`
-    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
+    Conditional(Box<Expr>, Box<Expr>, Box<Expr>),
 
     // ── assignment ─────────────────────────────────────────────────────────
     /// `unary_expression assignment_operator assignment_expression`
-    Assign(AssignOp, Box<Expression>, Box<Expression>),
+    Assign(AssignOp, Box<Expr>, Box<Expr>),
 
     // ── comma ──────────────────────────────────────────────────────────────
     /// `expression ',' assignment_expression`
     /// It is recommended that only use comma operators in the `for` loop initializer and step expressions,
     /// but the grammar allows them anywhere.
-    Comma(Box<Expression>, Box<Expression>),
+    Comma(Box<Expr>, Box<Expr>),
 }
 
 /// Corresponds to `constant`.
@@ -699,7 +737,7 @@ pub enum Constant {
 pub enum StringLiteral {
     /// `STRING_LITERAL` (may be the result of concatenation).
     Literal(String),
-    /// `FUNC_NAME` (`__func__`).
+    /// `FUNC_NAME` (i.e., `__func__`).
     FuncName,
 }
 
@@ -719,7 +757,7 @@ pub struct GenericSelection {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenericControlling {
     /// `assignment_expression` (valid since C11)
-    Expression(Box<Expression>),
+    Expression(Box<Expr>),
     /// C23: type-name as the controlling operand.
     Type(TypeName),
 }
@@ -728,16 +766,16 @@ pub enum GenericControlling {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenericAssociation {
     /// `type_name ':' assignment_expression`
-    Type(TypeName, Box<Expression>),
+    Type(TypeName, Box<Expr>),
     /// `DEFAULT ':' assignment_expression`
-    Default(Box<Expression>),
+    Default(Box<Expr>),
 }
 
 /// The operand of a `sizeof` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SizeofOperand {
     /// `sizeof unary_expression`
-    Expression(Box<Expression>),
+    Expression(Box<Expr>),
     /// `sizeof '(' type_name ')'`
     Type(TypeName),
 }

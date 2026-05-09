@@ -4,10 +4,8 @@
 // the Mozilla Public License version 2.0 and additional exceptions.
 // For more details, see the LICENSE, LICENSE.additional, and CONTRIBUTING files.
 
-mod file_position;
-mod frontend;
-mod utils;
-
+pub mod cst;
+pub mod cst_parser;
 pub mod error;
-
-pub use self::frontend::parser::parse;
+pub mod file_position;
+pub mod ir;

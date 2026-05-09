@@ -101,7 +101,7 @@ mod tests {
     use ancpp::token::{IntegerNumber, IntegerNumberWidth, Number, Punctuator, Token};
     use pretty_assertions::assert_eq;
 
-    use crate::utils::preprocess;
+    use crate::common::preprocess;
 
     #[test]
     fn test_preprocess() {

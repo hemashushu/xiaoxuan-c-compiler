@@ -14,7 +14,6 @@ use ancpp::{
     linter::Linter,
     location::Location,
     peekable_iter::PeekableIter,
-    position::Position,
     process_source_file,
     token::{
         C23_KEYWORD_STRS, C23Keyword, IntegerNumber, IntegerNumberWidth, Number, Punctuator, Token,
@@ -23,19 +22,21 @@ use ancpp::{
 };
 
 use crate::{
-    error::CompileError,
-    frontend::cst::{
+    cst::{
         AbstractDeclarator, AlignmentSpecifier, ArraySize, AssignOp, Attribute, AttributeToken,
         BinaryOp, BlockItem, Constant, Declaration, DeclarationSpecifier, Declarator, Designator,
-        DirectAbstractDeclarator, DirectDeclarator, EnumSpecifier, Enumerator, Expression,
-        ExternalDeclaration, ForInit, FunctionDefinition, FunctionParams, FunctionSpecifier,
-        GenericAssociation, GenericControlling, GenericSelection, InitDeclarator, Initializer,
-        InitializerItem, IterationStatement, JumpStatement, Label, LabelKind, LabeledStatement,
-        ParameterDeclaration, ParameterTypeList, Pointer, SelectionStatement, SizeofOperand,
-        SpecifierQualifier, Statement, StaticAssert, StorageClassSpecifier, StringLiteral,
-        StructDeclaration, StructDeclarator, StructOrUnion, StructOrUnionSpecifier,
-        TranslationUnit, TypeName, TypeQualifier, TypeSpecifier, TypeofSpecifier, UnaryOp,
+        DirectAbstractDeclarator, DirectDeclarator, EnumSpecifier, Enumerator, Expr, Expression,
+        ExtDecl, ExternalDeclaration, ForInit, FunctionDefinition, FunctionParams,
+        FunctionSpecifier, GenericAssociation, GenericControlling, GenericSelection,
+        InitDeclarator, Initializer, InitializerItem, IterationStatement, JumpStatement, Label,
+        LabelKind, LabeledStatement, ParameterDeclaration, ParameterTypeList, Pointer,
+        SelectionStatement, SizeofOperand, Spanned, SpecifierQualifier, Statement, StaticAssert,
+        Stmt, StorageClassSpecifier, StringLiteral, StructDeclaration, StructDeclarator,
+        StructOrUnion, StructOrUnionSpecifier, TranslationUnit, TypeName, TypeQualifier,
+        TypeSpecifier, TypeofSpecifier, UnaryOp,
     },
+    error::CompileError,
+    file_position::FilePosition,
 };
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -106,6 +107,18 @@ impl<'a> Parser<'a> {
         match self.upstream.peek(offset) {
             Some(TokenWithLocation { location, .. }) => Some(location),
             None => None,
+        }
+    }
+
+    /// Returns the [`FilePosition`] of the token at `offset` in the peek buffer.
+    /// Falls back to `last_location` when the stream is exhausted (e.g. at EOF).
+    fn peek_file_position(&self, offset: usize) -> FilePosition {
+        match self.peek_location(offset) {
+            Some(loc) => FilePosition::new(loc.file_number, &loc.range.start),
+            None => FilePosition::new(
+                self.last_location.file_number,
+                &self.last_location.range.start,
+            ),
         }
     }
 
@@ -577,12 +590,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_external_declaration(&mut self) -> Result<ExternalDeclaration, CompileError> {
+    fn parse_external_declaration(&mut self) -> Result<ExtDecl, CompileError> {
         // external_declaration
         //     : function_definition
         //     | declaration
         //     ;
 
+        let pos = self.peek_file_position(0);
         let declaration = self.parse_declaration()?;
 
         let external_declaration = if let Declaration::Var {
@@ -605,8 +619,8 @@ impl<'a> Parser<'a> {
                 for init_declarator in init_declarators {
                     if let InitDeclarator::Init(_, _) = init_declarator {
                         return Err(CompileError::MessageWithPosition(
-                            0,                   // todo:: file_number need to be improved
-                            Position::default(), // todo:: position need to be improved
+                            pos.file_number,
+                            pos.position,
                             "Initializer is not allowed in function definition.".to_string(),
                         ));
                     }
@@ -617,31 +631,37 @@ impl<'a> Parser<'a> {
 
                 if declarator.len() != 1 {
                     return Err(CompileError::MessageWithPosition(
-                        0,                   // todo:: file_number need to be improved
-                        Position::default(), // todo:: position need to be improved
+                        pos.file_number,
+                        pos.position,
                         "Only one declarator is allowed in function definition.".to_string(),
                     ));
                 }
 
-                ExternalDeclaration::Function(FunctionDefinition {
-                    attributes,
-                    declaration_specifiers,
-                    declarator: declarator.into_iter().next().unwrap(),
-                    body,
-                })
+                Spanned::new(
+                    ExternalDeclaration::Function(FunctionDefinition {
+                        attributes,
+                        declaration_specifiers,
+                        declarator: declarator.into_iter().next().unwrap(),
+                        body,
+                    }),
+                    pos,
+                )
             } else {
                 // it is `declaration`
                 self.consume_semicolon()?; // consume the ';' after the declaration
 
-                ExternalDeclaration::Declaration(Declaration::Var {
-                    attributes,
-                    declaration_specifiers,
-                    init_declarators,
-                })
+                Spanned::new(
+                    ExternalDeclaration::Declaration(Declaration::Var {
+                        attributes,
+                        declaration_specifiers,
+                        init_declarators,
+                    }),
+                    pos,
+                )
             }
         } else {
             // it is attribute declaration or static assert declaration.
-            ExternalDeclaration::Declaration(declaration)
+            Spanned::new(ExternalDeclaration::Declaration(declaration), pos)
         };
 
         Ok(external_declaration)
@@ -900,7 +920,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_constant_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_constant_expression(&mut self) -> Result<Expr, CompileError> {
         // constant_expression
         //     : conditional_expression    /* with constraints */
         //     ;
@@ -1142,7 +1162,7 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
-    /// Parses the body of `typeof(…)` / `typeof_unqual(…)` after the keyword has been consumed.
+    /// Parses the body of `typeof(...)` / `typeof_unqual(...)` after the keyword has been consumed.
     fn parse_typeof_specifier(&mut self, unqual: bool) -> Result<TypeofSpecifier, CompileError> {
         // C23: typeof(expression) / typeof(type_name)
         // typeof_unqual(expression) / typeof_unqual(type_name)
@@ -2177,8 +2197,12 @@ impl<'a> Parser<'a> {
 
         // 1. Static assert
         if self.peek_and_equals_keyword(0, C23Keyword::StaticAssert) {
+            let pos = self.peek_file_position(0);
             let sa = self.parse_static_assert_declaration()?;
-            return Ok(BlockItem::Declaration(Declaration::StaticAssert(sa)));
+            return Ok(BlockItem::Declaration(Spanned::new(
+                Declaration::StaticAssert(sa),
+                pos,
+            )));
         }
 
         // 2. Optional attributes
@@ -2192,8 +2216,12 @@ impl<'a> Parser<'a> {
         if !attributes.is_empty() {
             // `[[...]] ;` -> standalone attribute declaration
             if self.peek_and_equals_punctuator(0, Punctuator::Semicolon) {
+                let pos = self.peek_file_position(0);
                 self.consume_semicolon()?;
-                return Ok(BlockItem::Declaration(Declaration::Attribute(attributes)));
+                return Ok(BlockItem::Declaration(Spanned::new(
+                    Declaration::Attribute(attributes),
+                    pos,
+                )));
             }
 
             // `[[...]] case ...` / `[[...]] default ...` / `[[...]] ident ':'`  -> label
@@ -2208,8 +2236,9 @@ impl<'a> Parser<'a> {
 
             // Otherwise: attributes on a declaration
             if self.peek_and_is_declaration_specifier(0) {
+                let pos = self.peek_file_position(0);
                 let decl = self.parse_declaration_with_attributes(attributes)?;
-                return Ok(BlockItem::Declaration(decl));
+                return Ok(BlockItem::Declaration(Spanned::new(decl, pos)));
             }
 
             return Err(self.build_error_with_last_location(
@@ -2229,12 +2258,13 @@ impl<'a> Parser<'a> {
 
         // 5. Declaration
         if self.peek_and_is_declaration_specifier(0) {
+            let pos = self.peek_file_position(0);
             let decl = self.parse_declaration()?;
             // Declaration::Var does not consume ';'; handle here
             if let Declaration::Var { .. } = &decl {
                 self.consume_semicolon()?;
             }
-            return Ok(BlockItem::Declaration(decl));
+            return Ok(BlockItem::Declaration(Spanned::new(decl, pos)));
         }
 
         // 6. Statement
@@ -2254,10 +2284,14 @@ impl<'a> Parser<'a> {
 
         if next_is_statement_start {
             let statement = self.parse_statement()?;
-            Ok(BlockItem::Statement(Statement::Labeled(LabeledStatement {
-                label,
-                statement: Box::new(statement),
-            })))
+            let pos = statement.pos;
+            Ok(BlockItem::Statement(Spanned::new(
+                Statement::Labeled(LabeledStatement {
+                    label,
+                    statement: Box::new(statement),
+                }),
+                pos,
+            )))
         } else {
             Ok(BlockItem::Label(label))
         }
@@ -2300,7 +2334,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_statement(&mut self) -> Result<Statement, CompileError> {
+    fn parse_statement(&mut self) -> Result<Stmt, CompileError> {
         // statement
         //     : labeled_statement
         //     | compound_statement
@@ -2309,6 +2343,8 @@ impl<'a> Parser<'a> {
         //     | iteration_statement
         //     | jump_statement
         //     ;
+
+        let pos = self.peek_file_position(0);
 
         let statement = match self.peek_token(0) {
             Some(Token::Punctuator(Punctuator::BraceOpen)) => {
@@ -2361,7 +2397,7 @@ impl<'a> Parser<'a> {
             }
         };
 
-        Ok(statement)
+        Ok(Spanned::new(statement, pos))
     }
 
     fn parse_label(&mut self, attributes: Vec<Attribute>) -> Result<Label, CompileError> {
@@ -2485,12 +2521,13 @@ impl<'a> Parser<'a> {
                     let init = if self.peek_and_equals_keyword(0, C23Keyword::StaticAssert)
                         || self.peek_and_is_declaration_specifier(0)
                     {
+                        let pos = self.peek_file_position(0);
                         let decl = self.parse_declaration()?;
                         // Declaration::Var does not consume ';'; the expression_statement does
                         if let Declaration::Var { .. } = &decl {
                             self.consume_semicolon()?;
                         }
-                        ForInit::Declaration(decl)
+                        ForInit::Declaration(Spanned::new(decl, pos))
                     } else {
                         let expr_opt = self.parse_expression_statement()?;
                         ForInit::Expression(expr_opt)
@@ -2592,7 +2629,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expression_statement(&mut self) -> Result<Option<Expression>, CompileError> {
+    fn parse_expression_statement(&mut self) -> Result<Option<Expr>, CompileError> {
         // expression_statement
         //     : ';'
         //     | expression ';'
@@ -2608,7 +2645,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_expression(&mut self) -> Result<Expr, CompileError> {
         // expression
         //     : assignment_expression
         //     | expression ',' assignment_expression
@@ -2616,14 +2653,15 @@ impl<'a> Parser<'a> {
 
         let mut lhs = self.parse_assignment_expression()?;
         while self.peek_and_equals_punctuator(0, Punctuator::Comma) {
+            let pos = lhs.pos;
             self.consume_comma()?;
             let rhs = self.parse_assignment_expression()?;
-            lhs = Expression::Comma(Box::new(lhs), Box::new(rhs));
+            lhs = Spanned::new(Expression::Comma(Box::new(lhs), Box::new(rhs)), pos);
         }
         Ok(lhs)
     }
 
-    fn parse_assignment_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_assignment_expression(&mut self) -> Result<Expr, CompileError> {
         // assignment_expression
         //     : conditional_expression
         //     | unary_expression assignment_operator assignment_expression
@@ -2648,6 +2686,7 @@ impl<'a> Parser<'a> {
                 ),
             ) => {
                 let assign_op = AssignOp::from(token);
+                let pos = lhs.pos;
 
                 // todo::
                 // We parse the LHS as a conditional_expression first.  If the next token is an
@@ -2657,13 +2696,16 @@ impl<'a> Parser<'a> {
 
                 self.next_token(); // consume the assignment operator
                 let rhs = self.parse_assignment_expression()?;
-                Ok(Expression::Assign(assign_op, Box::new(lhs), Box::new(rhs)))
+                Ok(Spanned::new(
+                    Expression::Assign(assign_op, Box::new(lhs), Box::new(rhs)),
+                    pos,
+                ))
             }
             _ => Ok(lhs),
         }
     }
 
-    fn parse_conditional_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_conditional_expression(&mut self) -> Result<Expr, CompileError> {
         // conditional_expression
         //     : logical_or_expression
         //     | logical_or_expression '?' expression ':' conditional_expression
@@ -2671,22 +2713,26 @@ impl<'a> Parser<'a> {
 
         let expression = self.parse_logical_or_expression()?;
         if self.peek_and_equals_punctuator(0, Punctuator::QuestionMark) {
+            let pos = expression.pos;
             self.consume_question_mark()?;
             let true_expression = self.parse_expression()?;
             self.consume_colon()?;
             let false_expression = self.parse_conditional_expression()?;
 
-            Ok(Expression::Conditional(
-                Box::new(expression),
-                Box::new(true_expression),
-                Box::new(false_expression),
+            Ok(Spanned::new(
+                Expression::Conditional(
+                    Box::new(expression),
+                    Box::new(true_expression),
+                    Box::new(false_expression),
+                ),
+                pos,
             ))
         } else {
             Ok(expression)
         }
     }
 
-    fn parse_logical_or_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_logical_or_expression(&mut self) -> Result<Expr, CompileError> {
         // logical_or_expression
         //     : logical_and_expression
         //     | logical_or_expression OR_OP logical_and_expression
@@ -2694,7 +2740,7 @@ impl<'a> Parser<'a> {
         self.parse_binary_expression(&[Punctuator::Or], Self::parse_logical_and_expression)
     }
 
-    fn parse_logical_and_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_logical_and_expression(&mut self) -> Result<Expr, CompileError> {
         // logical_and_expression
         //     : inclusive_or_expression
         //     | logical_and_expression AND_OP inclusive_or_expression
@@ -2702,7 +2748,7 @@ impl<'a> Parser<'a> {
         self.parse_binary_expression(&[Punctuator::And], Self::parse_inclusive_or_expression)
     }
 
-    fn parse_inclusive_or_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_inclusive_or_expression(&mut self) -> Result<Expr, CompileError> {
         // inclusive_or_expression
         //     : exclusive_or_expression
         //     | inclusive_or_expression '|' exclusive_or_expression
@@ -2713,7 +2759,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_exclusive_or_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_exclusive_or_expression(&mut self) -> Result<Expr, CompileError> {
         // exclusive_or_expression
         //     : and_expression
         //     | exclusive_or_expression '^' and_expression
@@ -2721,7 +2767,7 @@ impl<'a> Parser<'a> {
         self.parse_binary_expression(&[Punctuator::BitwiseXor], Self::parse_and_expression)
     }
 
-    fn parse_and_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_and_expression(&mut self) -> Result<Expr, CompileError> {
         // and_expression
         //     : equality_expression
         //     | and_expression '&' equality_expression
@@ -2730,7 +2776,7 @@ impl<'a> Parser<'a> {
         self.parse_binary_expression(&[Punctuator::BitwiseAnd], Self::parse_equality_expression)
     }
 
-    fn parse_equality_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_equality_expression(&mut self) -> Result<Expr, CompileError> {
         // equality_expression
         //     : relational_expression
         //     | equality_expression EQ_OP relational_expression
@@ -2742,7 +2788,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_relational_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_relational_expression(&mut self) -> Result<Expr, CompileError> {
         // relational_expression
         //     : shift_expression
         //     | relational_expression '<' shift_expression
@@ -2761,7 +2807,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_shift_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_shift_expression(&mut self) -> Result<Expr, CompileError> {
         // shift_expression
         //     : additive_expression
         //     | shift_expression LEFT_OP additive_expression
@@ -2774,7 +2820,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_additive_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_additive_expression(&mut self) -> Result<Expr, CompileError> {
         // additive_expression
         //     : multiplicative_expression
         //     | additive_expression '+' multiplicative_expression
@@ -2787,7 +2833,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_multiplicative_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_multiplicative_expression(&mut self) -> Result<Expr, CompileError> {
         // multiplicative_expression
         //     : cast_expression
         //     | multiplicative_expression '*' cast_expression
@@ -2804,8 +2850,8 @@ impl<'a> Parser<'a> {
     fn parse_binary_expression(
         &mut self,
         operator_punctuators: &[Punctuator],
-        parse_rhs: fn(&mut Self) -> Result<Expression, CompileError>,
-    ) -> Result<Expression, CompileError> {
+        parse_rhs: fn(&mut Self) -> Result<Expr, CompileError>,
+    ) -> Result<Expr, CompileError> {
         let mut expression = parse_rhs(self)?;
 
         while let Some(token) = self.peek_token(0) {
@@ -2813,9 +2859,13 @@ impl<'a> Parser<'a> {
                 && operator_punctuators.contains(punctuator)
             {
                 let operator = BinaryOp::from(token);
+                let pos = expression.pos;
                 self.next_token(); // consume the operator
                 let rhs = parse_rhs(self)?;
-                expression = Expression::Binary(operator, Box::new(expression), Box::new(rhs));
+                expression = Spanned::new(
+                    Expression::Binary(operator, Box::new(expression), Box::new(rhs)),
+                    pos,
+                );
             } else {
                 break;
             }
@@ -2824,7 +2874,7 @@ impl<'a> Parser<'a> {
         Ok(expression)
     }
 
-    fn parse_cast_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_cast_expression(&mut self) -> Result<Expr, CompileError> {
         // cast_expression
         //     : unary_expression
         //     | '(' type_name ')' cast_expression
@@ -2838,6 +2888,7 @@ impl<'a> Parser<'a> {
         if self.peek_and_equals_punctuator(0, Punctuator::ParenthesisOpen)
             && self.peek_and_is_specifier_qualifier(1)
         {
+            let pos = self.peek_file_position(0);
             self.consume_opening_parenthesis()?;
 
             // todo::
@@ -2865,24 +2916,29 @@ impl<'a> Parser<'a> {
                 self.consume_closing_brace()?;
 
                 // Build the compound-literal base expression and apply postfix operators.
-                let mut expr = Expression::CompoundLiteral {
-                    storage,
-                    type_name,
-                    items,
-                };
-                expr = self.parse_postfix_expression_suffix(expr)?;
-                Ok(expr)
+                let base = Spanned::new(
+                    Expression::CompoundLiteral {
+                        storage,
+                        type_name,
+                        items,
+                    },
+                    pos,
+                );
+                self.parse_postfix_expression_suffix(base)
             } else {
                 // Plain cast: '(' type_name ')' cast_expression
                 let inner = self.parse_cast_expression()?;
-                Ok(Expression::Cast(type_name, Box::new(inner)))
+                Ok(Spanned::new(
+                    Expression::Cast(type_name, Box::new(inner)),
+                    pos,
+                ))
             }
         } else {
             self.parse_unary_expression()
         }
     }
 
-    fn parse_unary_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_unary_expression(&mut self) -> Result<Expr, CompileError> {
         // unary_expression
         //     : postfix_expression
         //     | INC_OP unary_expression
@@ -2897,14 +2953,22 @@ impl<'a> Parser<'a> {
 
         match self.peek_token(0) {
             Some(Token::Punctuator(Punctuator::Increase)) => {
+                let pos = self.peek_file_position(0);
                 self.next_token();
                 let operand = self.parse_unary_expression()?;
-                Ok(Expression::PreIncrement(Box::new(operand)))
+                Ok(Spanned::new(
+                    Expression::PreIncrement(Box::new(operand)),
+                    pos,
+                ))
             }
             Some(Token::Punctuator(Punctuator::Decrease)) => {
+                let pos = self.peek_file_position(0);
                 self.next_token();
                 let operand = self.parse_unary_expression()?;
-                Ok(Expression::PreDecrement(Box::new(operand)))
+                Ok(Spanned::new(
+                    Expression::PreDecrement(Box::new(operand)),
+                    pos,
+                ))
             }
             Some(
                 token @ Token::Punctuator(
@@ -2917,11 +2981,13 @@ impl<'a> Parser<'a> {
                 ),
             ) => {
                 let op = UnaryOp::from(token);
+                let pos = self.peek_file_position(0);
                 self.next_token();
                 let operand = self.parse_cast_expression()?;
-                Ok(Expression::Unary(op, Box::new(operand)))
+                Ok(Spanned::new(Expression::Unary(op, Box::new(operand)), pos))
             }
             Some(Token::Identifier(id)) if id == "sizeof" => {
+                let pos = self.peek_file_position(0);
                 self.next_token();
                 if self.peek_and_equals_punctuator(0, Punctuator::ParenthesisOpen)
                     && self.peek_and_is_specifier_qualifier(1)
@@ -2930,27 +2996,32 @@ impl<'a> Parser<'a> {
                     self.consume_opening_parenthesis()?;
                     let type_name = self.parse_type_name()?;
                     self.consume_closing_parenthesis()?;
-                    Ok(Expression::Sizeof(SizeofOperand::Type(type_name)))
+                    Ok(Spanned::new(
+                        Expression::Sizeof(SizeofOperand::Type(type_name)),
+                        pos,
+                    ))
                 } else {
                     // it is `sizeof unary_expression`
                     let operand = self.parse_unary_expression()?;
-                    Ok(Expression::Sizeof(SizeofOperand::Expression(Box::new(
-                        operand,
-                    ))))
+                    Ok(Spanned::new(
+                        Expression::Sizeof(SizeofOperand::Expression(Box::new(operand))),
+                        pos,
+                    ))
                 }
             }
             Some(Token::Identifier(id)) if id == "alignof" => {
+                let pos = self.peek_file_position(0);
                 self.next_token();
                 self.consume_opening_parenthesis()?;
                 let tn = self.parse_type_name()?;
                 self.consume_closing_parenthesis()?;
-                Ok(Expression::Alignof(tn))
+                Ok(Spanned::new(Expression::Alignof(tn), pos))
             }
             _ => self.parse_postfix_expression(),
         }
     }
 
-    fn parse_postfix_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_postfix_expression(&mut self) -> Result<Expr, CompileError> {
         // postfix_expression
         //     : primary_expression
         //     | postfix_expression '[' expression ']'
@@ -2983,19 +3054,18 @@ impl<'a> Parser<'a> {
     }
 
     /// Applies any postfix operators ([...], (...), .id, ->id, ++, --) to `base`.
-    fn parse_postfix_expression_suffix(
-        &mut self,
-        mut expr: Expression,
-    ) -> Result<Expression, CompileError> {
+    fn parse_postfix_expression_suffix(&mut self, mut expr: Expr) -> Result<Expr, CompileError> {
         while let Some(Token::Punctuator(p)) = self.peek_token(0) {
             match p {
                 Punctuator::BracketOpen => {
+                    let pos = expr.pos;
                     self.consume_opening_bracket()?;
                     let index = self.parse_expression()?;
                     self.consume_closing_bracket()?;
-                    expr = Expression::Index(Box::new(expr), Box::new(index));
+                    expr = Spanned::new(Expression::Index(Box::new(expr), Box::new(index)), pos);
                 }
                 Punctuator::ParenthesisOpen => {
+                    let pos = expr.pos;
                     self.consume_opening_parenthesis()?;
                     let mut args = Vec::new();
                     if !self.peek_and_equals_punctuator(0, Punctuator::ParenthesisClose) {
@@ -3006,25 +3076,29 @@ impl<'a> Parser<'a> {
                         }
                     }
                     self.consume_closing_parenthesis()?;
-                    expr = Expression::Call(Box::new(expr), args);
+                    expr = Spanned::new(Expression::Call(Box::new(expr), args), pos);
                 }
                 Punctuator::Dot => {
+                    let pos = expr.pos;
                     self.next_token();
                     let member = self.consume_identifier()?;
-                    expr = Expression::Member(Box::new(expr), member);
+                    expr = Spanned::new(Expression::Member(Box::new(expr), member), pos);
                 }
                 Punctuator::Arrow => {
+                    let pos = expr.pos;
                     self.next_token();
                     let member = self.consume_identifier()?;
-                    expr = Expression::ArrowMember(Box::new(expr), member);
+                    expr = Spanned::new(Expression::ArrowMember(Box::new(expr), member), pos);
                 }
                 Punctuator::Increase => {
+                    let pos = expr.pos;
                     self.next_token();
-                    expr = Expression::PostIncrement(Box::new(expr));
+                    expr = Spanned::new(Expression::PostIncrement(Box::new(expr)), pos);
                 }
                 Punctuator::Decrease => {
+                    let pos = expr.pos;
                     self.next_token();
-                    expr = Expression::PostDecrement(Box::new(expr));
+                    expr = Spanned::new(Expression::PostDecrement(Box::new(expr)), pos);
                 }
                 _ => {
                     break;
@@ -3035,7 +3109,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_primary_expression(&mut self) -> Result<Expression, CompileError> {
+    fn parse_primary_expression(&mut self) -> Result<Expr, CompileError> {
         // primary_expression
         //     : IDENTIFIER
         //     | constant
@@ -3045,50 +3119,70 @@ impl<'a> Parser<'a> {
         //     | NULLPTR            /* C23: null-pointer constant */
         //     ;
 
+        let pos = self.peek_file_position(0);
+
         match self.peek_token(0) {
             // `_Generic(...)`
             Some(Token::Identifier(id)) if id == "_Generic" => self.parse_generic_selection(),
             // `nullptr`
             Some(Token::Identifier(id)) if id == "nullptr" => {
                 self.next_token();
-                Ok(Expression::Nullptr)
+                Ok(Spanned::new(Expression::Nullptr, pos))
             }
             // `true`
             Some(Token::Identifier(id)) if id == "true" => {
                 self.next_token();
-                Ok(Expression::Constant(Constant::Bool(true)))
+                Ok(Spanned::new(
+                    Expression::Constant(Constant::Bool(true)),
+                    pos,
+                ))
             }
             // `false`
             Some(Token::Identifier(id)) if id == "false" => {
                 self.next_token();
-                Ok(Expression::Constant(Constant::Bool(false)))
+                Ok(Spanned::new(
+                    Expression::Constant(Constant::Bool(false)),
+                    pos,
+                ))
             }
             // `__func__`
             Some(Token::Identifier(id)) if id == "__func__" => {
                 self.next_token();
-                Ok(Expression::String(StringLiteral::FuncName))
+                Ok(Spanned::new(
+                    Expression::String(StringLiteral::FuncName),
+                    pos,
+                ))
             }
             // Enumeration constant or regular identifier
             Some(Token::Identifier(id)) => {
                 let id = id.clone();
                 self.next_token();
                 if self.exists_enum_constant(&id) {
-                    Ok(Expression::Constant(Constant::Enumeration(id)))
+                    Ok(Spanned::new(
+                        Expression::Constant(Constant::Enumeration(id)),
+                        pos,
+                    ))
                 } else {
-                    Ok(Expression::Identifier(id))
+                    Ok(Spanned::new(Expression::Identifier(id), pos))
                 }
             }
             // Integer literal
             Some(Token::Number(Number::Integer(n))) => {
                 let num = n.clone();
                 self.next_token();
-                Ok(Expression::Constant(Constant::Integer(num)))
+                Ok(Spanned::new(
+                    Expression::Constant(Constant::Integer(num)),
+                    pos,
+                ))
             }
             // Float literal
             Some(Token::Number(Number::FloatingPoint(n))) => {
                 let num = n.clone();
                 self.next_token();
-                Ok(Expression::Constant(Constant::Float(num)))
+                Ok(Spanned::new(
+                    Expression::Constant(Constant::Float(num)),
+                    pos,
+                ))
             }
             // Character constant (represented as integer in C)
             Some(Token::Char(c, _)) => {
@@ -3096,13 +3190,19 @@ impl<'a> Parser<'a> {
                 let num =
                     IntegerNumber::new(codepoint.to_string(), true, IntegerNumberWidth::Default);
                 self.next_token();
-                Ok(Expression::Constant(Constant::Integer(num)))
+                Ok(Spanned::new(
+                    Expression::Constant(Constant::Integer(num)),
+                    pos,
+                ))
             }
             // String literal (possibly concatenated — preprocessing should have merged them)
             Some(Token::String(s, _)) => {
                 let s = s.clone();
                 self.next_token();
-                Ok(Expression::String(StringLiteral::Literal(s)))
+                Ok(Spanned::new(
+                    Expression::String(StringLiteral::Literal(s)),
+                    pos,
+                ))
             }
             // `( expression )` — grouped expression
             Some(Token::Punctuator(Punctuator::ParenthesisOpen)) => {
@@ -3121,7 +3221,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_generic_selection(&mut self) -> Result<Expression, CompileError> {
+    fn parse_generic_selection(&mut self) -> Result<Expr, CompileError> {
         // C23 6.5.1.1: The controlling operand may be an assignment_expression
         // OR a type_name.  Both forms are now grouped under the new
         // generic_controlling_operand non-terminal.
@@ -3145,6 +3245,7 @@ impl<'a> Parser<'a> {
         //     | DEFAULT ':' assignment_expression
         //     ;
 
+        let pos = self.peek_file_position(0);
         self.consume_and_assert_keyword(C23Keyword::Generic)?;
         self.consume_opening_parenthesis()?;
 
@@ -3182,10 +3283,13 @@ impl<'a> Parser<'a> {
 
         self.consume_closing_parenthesis()?;
 
-        Ok(Expression::Generic(Box::new(GenericSelection {
-            controlling,
-            associations,
-        })))
+        Ok(Spanned::new(
+            Expression::Generic(Box::new(GenericSelection {
+                controlling,
+                associations,
+            })),
+            pos,
+        ))
     }
 }
 

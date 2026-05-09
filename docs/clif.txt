@@ -1,0 +1,708 @@
+(*
+ * BNF for the Cranelift IR Text Format (.clif)
+ *
+ * Derived from:
+ *   - {cranelift_source_code_tree}/reader/src/lexer.rs
+ *   - {cranelift_source_code_tree}/reader/src/parser.rs
+ *   - {cranelift_source_code_tree}/reader/src/run_command.rs
+ *   - {cranelift_source_code_tree}/reader/src/testfile.rs
+ *   - {cranelift_source_code_tree}/filetests/filetests/**/*.clif
+ *
+ * Notation used here:
+ *   <rule> ::= ...      rule definition
+ *   A B                 concatenation
+ *   A | B               alternation
+ *   ""                  empty string (epsilon / empty production)
+ *   "token"             literal terminal
+ *   (* comment *)       comment
+ *
+ * Whitespace (spaces, tabs, newlines) between tokens is ignored unless noted.
+ * A semicolon ";" introduces a line comment that extends to end-of-line.
+ *
+ * EBNF shorthands have been expanded as follows:
+ *   { A }       =>  <A-list>  ::= "" | <A> <A-list>          (zero or more)
+ *   [ A ]       =>  two alternatives: "" | <A>               (zero or one)
+ *   ( A | B )   =>  inlined as separate BNF alternatives
+ *)
+
+(* ------------------------------------ *)
+(*  Top-level file structure                                     *)
+(* ------------------------------------ *)
+
+<test-file> ::= <test-command-list> <preamble-command-list> <feature-directive-list> <function-def-list>
+
+<test-command-list> ::= ""
+                      | <test-command> <test-command-list>
+
+<preamble-command-list> ::= ""
+                          | <set-command> <preamble-command-list>
+                          | <target-command> <preamble-command-list>
+
+<feature-directive-list> ::= ""
+                           | <feature-directive> <feature-directive-list>
+
+<function-def-list> ::= ""
+                      | <function-def> <function-def-list>
+
+(* ------------------------------------ *)
+(*  File preamble directives                                     *)
+(* ------------------------------------ *)
+
+(* "test" consumes the entire rest of the line *)
+<test-command> ::= "test" <rest-of-line>
+
+(* "set" consumes the entire rest of the line as key=value pairs *)
+<set-command> ::= "set" <set-param-list>
+
+<set-param-list> ::= ""
+                   | <ident> "=" <ident> <set-param-list>
+
+(* "target" consumes the rest of the line: triple + optional ISA flags *)
+<target-command> ::= "target" <target-triple> <isa-flag-list>
+
+<isa-flag-list> ::= ""
+                  | <ident> <isa-flag-list>
+                  | <ident> "=" <ident> <isa-flag-list>
+
+(* "feature" asserts a Cranelift compile-time feature *)
+<feature-directive> ::= "feature" <string-literal>
+                      | "feature" "!" <string-literal>
+
+<target-triple> ::= <ident>
+                  | <ident> "-" <ident> "-" <ident>
+                  | <ident> "-" <ident> "-" <ident> "-" <ident>
+
+(* ------------------------------------ *)
+(*  Function definition                                          *)
+(* ------------------------------------ *)
+
+<function-def> ::= "function" <func-name> <signature> "{" <preamble> <basic-block-list> "}"
+
+<basic-block-list> ::= ""
+                     | <basic-block> <basic-block-list>
+
+(* %foo, %my_func, %0  or  u3:17 (namespace:index form) *)
+<func-name> ::= <name>
+              | <user-ref> ":" <integer>
+
+(* ------------------------------------ *)
+(*  Function signature                                           *)
+(* ------------------------------------ *)
+
+<signature> ::= "(" ")" <return-spec-opt> <call-conv-opt>
+              | "(" <abi-param-list> ")" <return-spec-opt> <call-conv-opt>
+
+<return-spec-opt> ::= ""
+                    | "->" <abi-param-list>
+
+<call-conv-opt> ::= ""
+                  | <call-conv>
+
+<abi-param-list> ::= <abi-param>
+                   | <abi-param> "," <abi-param-list>
+
+<abi-param> ::= <type> <abi-flag-list>
+
+<abi-flag-list> ::= ""
+                  | <abi-flag> <abi-flag-list>
+
+<abi-flag> ::= "uext"
+             | "sext"
+             | "sarg" "(" <uimm32> ")"
+             | <arg-purpose>
+
+<arg-purpose> ::= "sret"
+                | "link"
+                | "fp"
+                | "csr"
+                | "vmctx"
+                | "sigid"
+                | "stack_limit"
+
+<call-conv> ::= "fast"
+              | "cold"
+              | "system_v"
+              | "windows_fastcall"
+              | "apple_aarch64"
+              | "baldrdash_system_v"
+              | "baldrdash2020"
+              | "probestack"
+              | "wasmtime_system_v"
+              | "wasmtime_fastcall"
+              | "wasmtime_apple_aarch64"
+              | "winch"
+              | <ident>
+
+(* ------------------------------------ *)
+(*  Function preamble declarations                               *)
+(* ------------------------------------ *)
+
+<preamble> ::= ""
+             | <preamble-decl> <preamble>
+
+<preamble-decl> ::= <stack-slot-decl>
+                  | <dynamic-stack-slot-decl>
+                  | <dynamic-type-decl>
+                  | <global-value-decl>
+                  | <signature-decl>
+                  | <function-decl>
+                  | <constant-decl>
+                  | <stack-limit-decl>
+
+(* --- Stack slots --- *)
+
+<stack-slot-decl> ::= <stack-slot> "=" <stack-slot-kind> <imm64> <stack-slot-flag-list>
+
+<stack-slot-flag-list> ::= ""
+                         | "," <stack-slot-flag> <stack-slot-flag-list>
+
+<stack-slot-kind> ::= "explicit_slot"
+                    | "spill_slot"
+                    | "incoming_arg"
+                    | "outgoing_arg"
+                    | "explicit_dynamic_slot"
+
+<stack-slot-flag> ::= "align" "=" <imm64>
+                    | "key" "=" <uimm64>
+
+(* --- Dynamic stack slots (SIMD / scalable vectors) --- *)
+
+<dynamic-stack-slot-decl> ::= <dyn-stack-slot> "=" <stack-slot-kind> <dynamic-type>
+
+(* --- Dynamic types (scalable vector types) --- *)
+
+<dynamic-type-decl> ::= <dynamic-type> "=" <vector-type> "*" <global-value>
+
+(* --- Global values --- *)
+
+<global-value-decl> ::= <global-value> "=" <global-value-desc>
+
+<global-value-desc> ::= "vmctx"
+                      | "load" "." <type> <mem-flags> <global-value> <offset32-opt>
+                      | "iadd_imm" "." <type> <global-value> "," <imm64>
+                      | "symbol" <symbol-colocated-opt> <symbol-tls-opt> <external-name> <offset64-opt>
+                      | "dyn_scale_target_const" "." <vector-type>
+
+<symbol-colocated-opt> ::= ""
+                         | "colocated"
+
+<symbol-tls-opt> ::= ""
+                   | "tls"
+
+<mem-flags> ::= ""
+              | <mem-flag> <mem-flags>
+
+<mem-flag> ::= "notrap"
+             | "aligned"
+             | "readonly"
+             | "heap"
+             | "table"
+             | "vmctx"
+             | "trusted"
+             | "checked"
+             | "little"
+             | "big"
+
+(* --- Signatures --- *)
+
+<signature-decl> ::= <sig-ref> "=" <signature>
+
+(* --- External function references --- *)
+
+<function-decl> ::= <func-ref> "=" <colocated-opt> <patchable-opt> <external-name> <function-decl-sig>
+
+<colocated-opt> ::= ""
+                  | "colocated"
+
+<patchable-opt> ::= ""
+                  | "patchable"
+
+<function-decl-sig> ::= <sig-ref>
+                      | <signature>
+
+(* --- Constants --- *)
+
+<constant-decl> ::= <constant> "=" <type> <uimm128>
+                  | <constant> "=" <hex-sequence>
+
+(* --- Stack limit --- *)
+
+<stack-limit-decl> ::= "stack_limit" "=" <global-value>
+
+(* ------------------------------------ *)
+(*  Basic blocks                                                 *)
+(* ------------------------------------ *)
+
+<basic-block> ::= <block-header> <instruction-list>
+
+<instruction-list> ::= ""
+                     | <instruction> <instruction-list>
+
+<block-header> ::= <block> ":"
+                 | <block> <block-params> ":"
+                 | <block> "cold" ":"
+                 | <block> <block-params> "cold" ":"
+
+<block-params> ::= "(" <block-param-list> ")"
+
+<block-param-list> ::= <block-param>
+                     | <block-param> "," <block-param-list>
+
+<block-param> ::= <value> ":" <type>
+
+(* ------------------------------------ *)
+(*  Instructions                                                 *)
+(* ------------------------------------ *)
+
+<instruction> ::= <src-loc-opt> <debug-tags-opt> <instruction-body>
+
+<src-loc-opt> ::= ""
+                | <src-loc>
+
+<debug-tags-opt> ::= ""
+                   | <debug-tags>
+
+<instruction-body> ::= <value-alias>
+                     | <inst-with-results>
+
+<src-loc> ::= "@" <hex-digits>
+
+<debug-tags> ::= "<" <debug-tag-list> ">"
+
+<debug-tag-list> ::= <debug-tag>
+                   | <debug-tag> "," <debug-tag-list>
+
+<debug-tag> ::= <uimm32>
+              | <stack-slot>
+
+<value-alias> ::= <inst-results> "->" <value>
+
+<inst-with-results> ::= <inst-result-prefix-opt> <opcode> <type-suffix-opt> <inst-operands> <stack-map-opt>
+
+<inst-result-prefix-opt> ::= ""
+                           | <inst-results> "="
+
+<type-suffix-opt> ::= ""
+                    | "." <type-or-dyntype>
+
+<stack-map-opt> ::= ""
+                  | "," "stack_map" "=" <stack-map-list>
+
+<inst-results> ::= <value>
+                 | <value> "," <inst-results>
+
+<type-or-dyntype> ::= <type>
+                    | <dynamic-type>
+
+(* <opcode> is any identifier naming a Cranelift instruction mnemonic *)
+<opcode> ::= <ident>
+
+(* ------------------------------------ *)
+(*  Instruction operand formats                                  *)
+(*  (one clause per InstructionFormat variant in codegen)       *)
+(* ------------------------------------ *)
+
+<inst-operands> ::=
+    (* NullAry: no operands, e.g.  nop *)
+                    ""
+    (* Unary: single value, e.g.  copy v1 *)
+                  | <value>
+    (* UnaryImm: typed immediate, e.g.  iconst.i32 42 *)
+                  | <imm64>
+    (* UnaryIeee16 *)
+                  | <ieee16>
+    (* UnaryIeee32 *)
+                  | <ieee32>
+    (* UnaryIeee64, e.g.  f64const 0x1.0p0 *)
+                  | <ieee64>
+    (* UnaryConst: SIMD constant, e.g.  vconst.i32x4 [0 1 2 3] or const2 *)
+                  | <constant>
+                  | <ieee128>
+                  | <type> <uimm128>
+    (* UnaryGlobalValue: e.g.  global_value.i32 gv3 *)
+                  | <global-value>
+    (* Binary: two values, e.g.  iadd v1, v2 *)
+                  | <value> "," <value>
+    (* BinaryImm8: value + u8, e.g.  extractlane v1, 2 *)
+                  | <value> "," <uimm8>
+    (* BinaryImm64: value + imm64, e.g.  iadd_imm v1, 10 *)
+                  | <value> "," <imm64>
+    (* Ternary: three values, e.g.  select v1, v2, v3 *)
+                  | <value> "," <value> "," <value>
+    (* TernaryImm8: two values + u8, e.g.  insertlane v1, v2, 3 *)
+                  | <value> "," <value> "," <uimm8>
+    (* MultiAry: variable-length value list, e.g.  return v1, v2 *)
+                  | <value-list>
+    (* Jump: block call, e.g.  jump block2(v1, v2) *)
+                  | <block-call>
+    (* Brif: value + two block calls, e.g.  brif v1, block2(v2), block3 *)
+                  | <value> "," <block-call> "," <block-call>
+    (* BranchTable: value + default block call + jump table *)
+                  | <value> "," <block-call> "," <jump-table>
+    (* IntCompare/FloatCompare: cond + two values *)
+                  | <int-cond> <value> "," <value>
+                  | <float-cond> <value> "," <value>
+    (* IntCompareImm: cond + value + imm *)
+                  | <int-cond> <value> "," <imm64>
+    (* Call: fn-ref + arg list *)
+                  | <func-ref> "(" ")"
+                  | <func-ref> "(" <value-list> ")"
+    (* CallIndirect: sig-ref + callee value + arg list *)
+                  | <sig-ref> "," <value> "(" ")"
+                  | <sig-ref> "," <value> "(" <value-list> ")"
+    (* TryCall: fn-ref + args + exception-table *)
+                  | <func-ref> "(" ")" "," <exception-table>
+                  | <func-ref> "(" <value-list> ")" "," <exception-table>
+    (* TryCallIndirect: callee value + args + exception-table *)
+                  | <value> "(" ")" "," <exception-table>
+                  | <value> "(" <value-list> ")" "," <exception-table>
+    (* FuncAddr: fn-ref, e.g.  func_addr.i64 fn0 *)
+                  | <func-ref>
+    (* StackLoad: ss + optional offset, e.g.  stack_load.i32 ss0+4 *)
+                  | <stack-slot>
+                  | <stack-slot> <offset32>
+    (* StackStore: value + ss + optional offset *)
+                  | <value> "," <stack-slot>
+                  | <value> "," <stack-slot> <offset32>
+    (* DynamicStackLoad: dss, e.g.  dynamic_stack_load.i32x4 dss0 *)
+                  | <dyn-stack-slot>
+    (* DynamicStackStore: value + dss *)
+                  | <value> "," <dyn-stack-slot>
+    (* Load: mem-flags + addr + optional offset, e.g.  load.i32 aligned v1+8 *)
+                  | <mem-flags> <value>
+                  | <mem-flags> <value> <offset32>
+    (* Store: mem-flags + value + addr + optional offset *)
+                  | <mem-flags> <value> "," <value>
+                  | <mem-flags> <value> "," <value> <offset32>
+    (* Trap: trap code *)
+                  | <trap-code>
+    (* CondTrap: value + trap code *)
+                  | <value> "," <trap-code>
+    (* AtomicCas: mem-flags + addr + expected + replacement *)
+                  | <mem-flags> <value> "," <value> "," <value>
+    (* AtomicRmw: mem-flags + atomic-op + addr + operand *)
+                  | <mem-flags> <atomic-rmw-op> <value> "," <value>
+    (* IntAddTrap: two values + trap code *)
+                  | <value> "," <value> "," <trap-code>
+    (* Shuffle: two values + uimm128 mask *)
+                  | <value> "," <value> "," <uimm128>
+
+(* ------------------------------------ *)
+(*  Auxiliary grammar elements                                   *)
+(* ------------------------------------ *)
+
+<block-call> ::= <block>
+               | <block> "(" ")"
+               | <block> "(" <block-call-arg-list> ")"
+
+<block-call-arg-list> ::= <block-call-arg>
+                        | <block-call-arg> "," <block-call-arg-list>
+
+<block-call-arg> ::= <value>
+                   | <try-call-ret>
+                   | <try-call-exn>
+
+<value-list> ::= <value>
+               | <value> "," <value-list>
+
+<jump-table> ::= "[" "]"
+               | "[" <block-call-list> "]"
+
+<block-call-list> ::= <block-call>
+                    | <block-call> "," <block-call-list>
+
+<exception-table> ::= <sig-ref> "," <block-call> "," "[" "]"
+                    | <sig-ref> "," <block-call> "," "[" <exception-entry-list> "]"
+
+<exception-entry-list> ::= <exception-entry>
+                         | <exception-entry> "," <exception-entry-list>
+
+<exception-entry> ::= <exception-tag> ":" <block-call>
+                    | "default" ":" <block-call>
+                    | "context" <value>
+
+<stack-map-list> ::= "[" "]"
+                   | "[" <stack-map-entry-list> "]"
+
+<stack-map-entry-list> ::= <stack-map-entry>
+                         | <stack-map-entry> "," <stack-map-entry-list>
+
+<stack-map-entry> ::= <type> "@" <stack-slot> "+" <uimm32>
+
+(* ------------------------------------ *)
+(*  Condition codes and trap codes                               *)
+(* ------------------------------------ *)
+
+<int-cond> ::= "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+             | "ult" | "ule" | "ugt" | "uge" | "of" | "nof"
+
+<float-cond> ::= "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+               | "ord" | "uno" | "une" | "ugt" | "uge" | "ult" | "ule"
+
+<trap-code> ::= "stk_ovf"
+              | "heap_oob"
+              | "int_ovf"
+              | "int_divz"
+              | "bad_conversion_to_integer"
+              | "null_reference"
+              | "unreachable"
+              | "table_oob"
+              | "indirect_call_to_null"
+              | "heap_misaligned"
+              | "user" <integer>
+              | <ident>
+
+<atomic-rmw-op> ::= "add" | "sub" | "and" | "or" | "xor" | "xchg"
+                  | "nand" | "umin" | "umax" | "smin" | "smax"
+
+(* ------------------------------------ *)
+(*  Types                                                        *)
+(* ------------------------------------ *)
+
+<type> ::= <scalar-type>
+         | <vector-type>
+
+<scalar-type> ::= <int-type>
+                | <float-type>
+
+<int-type> ::= "i8" | "i16" | "i32" | "i64" | "i128"
+
+<float-type> ::= "f16" | "f32" | "f64" | "f128"
+
+(* e.g. i32x4, f64x2, i8x16 *)
+<vector-type> ::= <lane-type> "x" <positive-integer>
+
+<lane-type> ::= <int-type>
+              | <float-type>
+
+(* e.g. dt0, dt3 *)
+<dynamic-type> ::= "dt" <positive-integer>
+
+(* ------------------------------------ *)
+(*  Names and entity references                                  *)
+(* ------------------------------------ *)
+
+<external-name> ::= <name>
+                  | <user-ref> ":" <integer>
+                  | "userextname" <positive-integer>
+
+(* e.g. %foo, %0, %my_func_42 *)
+<name> ::= "%" <name-first-char> <name-rest>
+
+<name-first-char> ::= <letter>
+                    | <digit>
+
+<name-rest> ::= ""
+              | <letter> <name-rest>
+              | <digit> <name-rest>
+              | "_" <name-rest>
+
+(* Rust-style identifier without leading % *)
+<ident> ::= <ident-first-char> <ident-rest>
+
+<ident-first-char> ::= <letter>
+                     | "_"
+
+<ident-rest> ::= ""
+               | <letter> <ident-rest>
+               | <digit> <ident-rest>
+               | "_" <ident-rest>
+
+<value>             ::= "v" <positive-integer>
+
+<block>             ::= "block" <positive-integer>
+
+<stack-slot>        ::= "ss" <positive-integer>
+
+<dyn-stack-slot>    ::= "dss" <positive-integer>
+
+<global-value>      ::= "gv" <positive-integer>
+
+<memory-type>       ::= "mt" <positive-integer>
+
+<sig-ref>           ::= "sig" <positive-integer>
+
+<func-ref>          ::= "fn" <positive-integer>
+
+<constant>          ::= "const" <positive-integer>
+
+<user-ref>          ::= "u" <positive-integer>
+
+<exception-table-ref> ::= "extable" <positive-integer>
+
+<exception-tag>     ::= "tag" <positive-integer>
+
+<try-call-ret>      ::= "ret" <positive-integer>
+
+<try-call-exn>      ::= "exn" <positive-integer>
+
+(* ------------------------------------ *)
+(*  Immediates                                                   *)
+(* ------------------------------------ *)
+
+<imm64> ::= <decimal-digits>
+          | <hex-integer>
+          | "+" <decimal-digits>
+          | "-" <decimal-digits>
+          | "+" <hex-integer>
+          | "-" <hex-integer>
+
+<uimm64> ::= <decimal-digits>
+           | <hex-integer>
+
+<uimm32> ::= <decimal-digits>
+           | <hex-integer>
+
+<uimm8> ::= <decimal-digits>
+          | <hex-integer>
+
+(* e.g. +8, -72, +0x10 *)
+<offset32> ::= "+" <decimal-digits>
+             | "-" <decimal-digits>
+             | "+" <hex-integer>
+             | "-" <hex-integer>
+
+<offset64> ::= "+" <decimal-digits>
+             | "-" <decimal-digits>
+             | "+" <hex-integer>
+             | "-" <hex-integer>
+
+<offset32-opt> ::= ""
+                 | <offset32>
+
+<offset64-opt> ::= ""
+                 | <offset64>
+
+(* uimm128: either a single little-endian hex blob or a bracketed list of lane literals *)
+<uimm128> ::= <hex-integer>
+            | "[" <uimm128-literal-list> "]"
+
+<uimm128-literal-list> ::= <uimm128-literal>
+                          | <uimm128-literal> <uimm128-literal-list>
+
+<uimm128-literal> ::= <imm64>
+                    | <ieee32>
+                    | <ieee64>
+
+<ieee16>  ::= <float-number>
+
+<ieee32>  ::= <float-number>
+
+<ieee64>  ::= <float-number>
+
+<ieee128> ::= <float-number>
+
+<float-number> ::= <float-mantissa-hex>
+                 | <float-decimal>
+                 | "NaN"
+                 | "NaN:" <hex-integer>
+                 | "sNaN:" <hex-integer>
+                 | "Inf"
+                 | "-Inf"
+                 | "+" <float-mantissa-hex>
+                 | "-" <float-mantissa-hex>
+                 | "+" <float-decimal>
+                 | "-" <float-decimal>
+
+<float-mantissa-hex> ::= "0x" <hex-float-mantissa>
+                       | "0x" <hex-float-mantissa> "p" <decimal-digits>
+                       | "0x" <hex-float-mantissa> "p" "-" <decimal-digits>
+
+<float-decimal> ::= <decimal-digits> "." <decimal-digits>
+
+<hex-float-mantissa> ::= <hex-digits>
+                       | <hex-digits> "." <hex-digits>
+
+<hex-integer> ::= "0x" <underscore-list> <hex-digits> <hex-digit-or-underscore-list>
+
+<underscore-list> ::= ""
+                    | "_" <underscore-list>
+
+<hex-digit-or-underscore-list> ::= ""
+                                 | <hex-digit-or-underscore> <hex-digit-or-underscore-list>
+
+(* used for raw constant bytes *)
+<hex-sequence> ::= "#" <hex-digits>
+
+<decimal-digits> ::= <digit>
+                   | <digit> <decimal-digits>
+
+<hex-digits> ::= <hex-digit>
+               | <hex-digit> <hex-digits>
+
+<hex-digit-or-underscore> ::= <hex-digit>
+                            | "_"
+
+<string-literal> ::= '"' <string-char-list> '"'
+
+<string-char-list> ::= ""
+                     | <any-char-except-dquote> <string-char-list>
+
+<letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j"
+           | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t"
+           | "u" | "v" | "w" | "x" | "y" | "z"
+           | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J"
+           | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T"
+           | "U" | "V" | "W" | "X" | "Y" | "Z"
+
+<digit> ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<hex-digit> ::= <digit>
+              | "a" | "b" | "c" | "d" | "e" | "f"
+              | "A" | "B" | "C" | "D" | "E" | "F"
+
+(* leading zeros not allowed for entity references *)
+<positive-integer> ::= <digit>
+                     | <digit> <positive-integer>
+
+<integer> ::= <positive-integer>
+
+(* <rest-of-line> and <any-char-except-dquote> are lexer-level pseudo-terminals
+   representing all characters up to end-of-line and all characters except '"',
+   respectively. *)
+
+(* ------------------------------------ *)
+(*  Filecheck / run-command annotations (inside comments)       *)
+(* ------------------------------------ *)
+
+(*
+  These are not part of the grammar of the IR body itself, but appear
+  as specially-parsed comment content in .clif test files.
+*)
+
+<filecheck-comment> ::= ";" <filecheck-directive>
+                      | ";" <run-command>
+                      | ";" <print-command>
+                      | ";" <plain-comment>
+
+<filecheck-directive> ::= "check:" <pattern-text>
+                        | "sameln:" <pattern-text>
+                        | "nextln:" <pattern-text>
+                        | "unordered:" <pattern-text>
+                        | "not:" <pattern-text>
+                        | "regex:" <pattern-text>
+                        | "empty"
+                        | "not-empty"
+
+<run-command> ::= "run"
+                | "run" ":" <run-invocation> <comparison> <run-expected>
+
+<print-command> ::= "print"
+                  | "print" ":" <run-invocation>
+
+<run-invocation> ::= <name> "(" ")"
+                   | <name> "(" <data-value-list> ")"
+
+<comparison> ::= "==" | "!="
+
+<run-expected> ::= <data-value>
+                 | "[" "]"
+                 | "[" <data-value-list> "]"
+
+<data-value-list> ::= <data-value>
+                    | <data-value> "," <data-value-list>
+
+<data-value> ::= <imm64> | <ieee16> | <ieee32> | <ieee64> | <uimm128>
+
+(* <pattern-text> is a lexer-level pseudo-terminal representing arbitrary text
+   to end of line, matched by the filecheck tool. *)

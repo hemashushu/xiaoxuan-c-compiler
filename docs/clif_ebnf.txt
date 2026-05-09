@@ -1,0 +1,474 @@
+(*
+ * EBNF for the Cranelift IR Text Format (.clif)
+ *
+ * Derived from:
+ *   - {cranelift_source_code_tree}/reader/src/lexer.rs
+ *   - {cranelift_source_code_tree}/reader/src/parser.rs
+ *   - {cranelift_source_code_tree}/reader/src/run_command.rs
+ *   - {cranelift_source_code_tree}/reader/src/testfile.rs
+ *   - {cranelift_source_code_tree}/filetests/filetests/**/*.clif
+ *
+ * Notation used here:
+ *   rule = ...               definition
+ *   A B                      concatenation
+ *   A | B                    alternation
+ *   [ A ]                    option (zero or one)
+ *   { A }                    repetition (zero or more)
+ *   ( A )                    grouping
+ *   "token"                  literal terminal
+ *   (* comment *)            comment
+ *
+ * Whitespace (spaces, tabs, newlines) between tokens is ignored unless noted.
+ * A semicolon ";" introduces a line comment that extends to end-of-line.
+ *)
+
+(* ------------------------------------ *)
+(*  Top-level file structure                                     *)
+(* ------------------------------------ *)
+
+test-file   = { test-command }
+              { set-command | target-command }
+              { feature-directive }
+              { function-def } ;
+
+(* ------------------------------------ *)
+(*  File preamble directives                                     *)
+(* ------------------------------------ *)
+
+(* "test" consumes the entire rest of the line *)
+test-command    = "test" rest-of-line ;
+
+(* "set" consumes the entire rest of the line as key=value pairs *)
+set-command     = "set" { ident "=" ident } ;
+
+(* "target" consumes the rest of the line: triple + optional ISA flags *)
+target-command  = "target" target-triple { ident [ "=" ident ] } ;
+
+(* "feature" asserts a Cranelift compile-time feature *)
+feature-directive = "feature" [ "!" ] string-literal ;
+
+target-triple = ident                                (* e.g. x86_64, aarch64-unknown-linux-gnu *)
+              | ident "-" ident "-" ident
+              | ident "-" ident "-" ident "-" ident ;
+
+(* ------------------------------------ *)
+(*  Function definition                                          *)
+(* ------------------------------------ *)
+
+function-def  = "function" func-name signature "{"
+                    preamble
+                    { basic-block }
+                "}" ;
+
+func-name     = name                      (* %foo, %my_func, %0, ... *)
+              | user-ref ":" integer      (* u3:17  — namespace:index form *) ;
+
+(* ------------------------------------ *)
+(*  Function signature                                           *)
+(* ------------------------------------ *)
+
+signature     = "(" [ abi-param-list ] ")" [ "->" abi-param-list ] [ call-conv ] ;
+
+abi-param-list = abi-param { "," abi-param } ;
+
+abi-param      = type { abi-flag } ;
+
+abi-flag       = "uext"
+               | "sext"
+               | "sarg" "(" uimm32 ")"   (* struct argument of given byte-size *)
+               | arg-purpose ;
+
+arg-purpose    = "sret" | "link" | "fp" | "csr" | "vmctx" | "sigid" | "stack_limit" ;
+
+call-conv      = "fast" | "cold" | "system_v" | "windows_fastcall"
+               | "apple_aarch64" | "baldrdash_system_v" | "baldrdash2020"
+               | "probestack" | "wasmtime_system_v" | "wasmtime_fastcall"
+               | "wasmtime_apple_aarch64" | "winch"
+               | ident ;                 (* forward-compatible catch-all *)
+
+(* ------------------------------------ *)
+(*  Function preamble declarations                               *)
+(* ------------------------------------ *)
+
+preamble       = { preamble-decl } ;
+
+preamble-decl  = stack-slot-decl
+               | dynamic-stack-slot-decl
+               | dynamic-type-decl
+               | global-value-decl
+               | signature-decl
+               | function-decl
+               | constant-decl
+               | stack-limit-decl ;
+
+(* --- Stack slots --- *)
+
+stack-slot-decl = stack-slot "=" stack-slot-kind imm64 { "," stack-slot-flag } ;
+
+stack-slot-kind = "explicit_slot" | "spill_slot" | "incoming_arg" | "outgoing_arg"
+                | "explicit_dynamic_slot" ;
+
+stack-slot-flag = "align" "=" imm64
+                | "key"   "=" uimm64 ;
+
+(* --- Dynamic stack slots (SIMD / scalable vectors) --- *)
+
+dynamic-stack-slot-decl = dyn-stack-slot "=" stack-slot-kind dynamic-type ;
+
+(* --- Dynamic types (scalable vector types) --- *)
+
+dynamic-type-decl = dynamic-type "=" vector-type "*" global-value ;
+
+(* --- Global values --- *)
+
+global-value-decl = global-value "=" global-value-desc ;
+
+global-value-desc = "vmctx"
+                  | "load" "." type mem-flags global-value [ offset32 ]
+                  | "iadd_imm" "." type global-value "," imm64
+                  | "symbol" [ "colocated" ] [ "tls" ] external-name [ offset64 ]
+                  | "dyn_scale_target_const" "." vector-type ;
+
+mem-flags      = { mem-flag } ;
+
+mem-flag       = "notrap" | "aligned" | "readonly" | "heap" | "table"
+               | "vmctx"  | "trusted" | "checked" | "little" | "big" ;
+
+(* --- Signatures --- *)
+
+signature-decl = sig-ref "=" signature ;
+
+(* --- External function references --- *)
+
+function-decl  = func-ref "=" [ "colocated" ] [ "patchable" ] external-name function-decl-sig ;
+
+function-decl-sig = sig-ref
+                  | signature ;           (* inline signature *)
+
+(* --- Constants --- *)
+
+constant-decl  = constant "=" ( type uimm128 | hex-sequence ) ;
+
+(* --- Stack limit --- *)
+
+stack-limit-decl = "stack_limit" "=" global-value ;
+
+(* ------------------------------------ *)
+(*  Basic blocks                                                 *)
+(* ------------------------------------ *)
+
+basic-block    = block-header { instruction } ;
+
+block-header   = block [ block-params ] [ "cold" ] ":" ;
+
+block-params   = "(" block-param { "," block-param } ")" ;
+
+block-param    = value ":" type ;
+
+(* ------------------------------------ *)
+(*  Instructions                                                 *)
+(* ------------------------------------ *)
+
+instruction    = [ src-loc ] [ debug-tags ]
+                 ( value-alias
+                 | inst-with-results ) ;
+
+src-loc        = "@" hex-digits ;          (* e.g. @00c7 *)
+
+debug-tags     = "<" debug-tag { "," debug-tag } ">" ;
+
+debug-tag      = uimm32                   (* user integer tag *)
+               | stack-slot ;             (* e.g. ss0 *)
+
+value-alias    = inst-results "->" value ;
+
+inst-with-results = [ inst-results "=" ] opcode [ "." type-or-dyntype ] inst-operands
+                    [ "," "stack_map" "=" stack-map-list ] ;
+
+inst-results   = value { "," value } ;
+
+type-or-dyntype = type | dynamic-type ;
+
+(* ------------------------------------ *)
+(*  Instruction operand formats                                  *)
+(*  (one clause per InstructionFormat variant in codegen)       *)
+(* ------------------------------------ *)
+
+inst-operands  =
+    (* NullAry: no operands, e.g. nop *)
+    |
+    (* Unary: single value, e.g.  copy v1 *)
+    value
+    (* UnaryImm: typed immediate, e.g. iconst.i32 42 *)
+    | imm64
+    (* UnaryIeee16 *)
+    | ieee16
+    (* UnaryIeee32 *)
+    | ieee32
+    (* UnaryIeee64, e.g.  f64const 0x1.0p0 *)
+    | ieee64
+    (* UnaryConst: SIMD constant, e.g. vconst.i32x4 [0 1 2 3] or const2 *)
+    | constant | ieee128 | type uimm128
+    (* UnaryGlobalValue: e.g. global_value.i32 gv3 *)
+    | global-value
+    (* Binary: two values, e.g. iadd v1, v2 *)
+    | value "," value
+    (* BinaryImm8: value + u8, e.g. extractlane v1, 2 *)
+    | value "," uimm8
+    (* BinaryImm64: value + imm64, e.g. iadd_imm v1, 10 *)
+    | value "," imm64
+    (* Ternary: three values, e.g. select v1, v2, v3 *)
+    | value "," value "," value
+    (* TernaryImm8: two values + u8, e.g. insertlane v1, v2, 3 *)
+    | value "," value "," uimm8
+    (* MultiAry: variable-length value list, e.g. return v1, v2 *)
+    | [ value { "," value } ]
+    (* Jump: block call, e.g. jump block2(v1, v2) *)
+    | block-call
+    (* Brif: value + two block calls, e.g. brif v1, block2(v2), block3 *)
+    | value "," block-call "," block-call
+    (* BranchTable: value + default + jump table *)
+    | value "," block-call "," jump-table
+    (* IntCompare/FloatCompare: cond + two values *)
+    | int-cond value "," value
+    | float-cond value "," value
+    (* IntCompareImm: cond + value + imm *)
+    | int-cond value "," imm64
+    (* Call: fn-ref + arg list *)
+    | func-ref "(" [ value-list ] ")"
+    (* CallIndirect: sig-ref + callee value + arg list *)
+    | sig-ref "," value "(" [ value-list ] ")"
+    (* TryCall: fn-ref + args + exception-table *)
+    | func-ref "(" [ value-list ] ")" "," exception-table
+    (* TryCallIndirect: callee + args + exception-table *)
+    | value "(" [ value-list ] ")" "," exception-table
+    (* FuncAddr: fn-ref, e.g. func_addr.i64 fn0 *)
+    | func-ref
+    (* StackLoad: ss + optional offset, e.g. stack_load.i32 ss0+4 *)
+    | stack-slot [ offset32 ]
+    (* StackStore: value + ss + optional offset *)
+    | value "," stack-slot [ offset32 ]
+    (* DynamicStackLoad: dss, e.g. dynamic_stack_load.i32x4 dss0 *)
+    | dyn-stack-slot
+    (* DynamicStackStore: value + dss *)
+    | value "," dyn-stack-slot
+    (* Load: mem-flags + addr + optional offset, e.g. load.i32 aligned v1+8 *)
+    | mem-flags value [ offset32 ]
+    (* Store: mem-flags + value + addr + optional offset *)
+    | mem-flags value "," value [ offset32 ]
+    (* LoadNoOffset / StoreNoOffset: same but without offset *)
+    (* Trap: trap code *)
+    | trap-code
+    (* CondTrap: value + trap code *)
+    | value "," trap-code
+    (* AtomicCas: mem-flags + addr + expected + replacement *)
+    | mem-flags value "," value "," value
+    (* AtomicRmw: mem-flags + atomic-op + addr + operand *)
+    | mem-flags atomic-rmw-op value "," value
+    (* IntAddTrap: two values + trap code *)
+    | value "," value "," trap-code
+    (* Shuffle: two values + uimm128 mask *)
+    | value "," value "," uimm128 ;
+
+(* ------------------------------------ *)
+(*  Auxiliary grammar elements                                   *)
+(* ------------------------------------ *)
+
+block-call     = block [ "(" { block-call-arg { "," block-call-arg } } ")" ] ;
+
+block-call-arg = value | try-call-ret | try-call-exn ;
+
+value-list     = value { "," value } ;
+
+jump-table     = "[" [ block-call { "," block-call } ] "]" ;
+
+exception-table = sig-ref "," block-call "," "[" { exception-entry { "," exception-entry } } "]" ;
+
+exception-entry = exception-tag ":" block-call
+                | "default" ":" block-call
+                | "context" value ;
+
+stack-map-list = "[" { stack-map-entry { "," stack-map-entry } } "]" ;
+
+stack-map-entry = type "@" stack-slot "+" uimm32 ;
+
+(* ------------------------------------ *)
+(*  Condition codes and trap codes                               *)
+(* ------------------------------------ *)
+
+int-cond      = "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+              | "ult" | "ule" | "ugt" | "uge" | "of" | "nof" ;
+
+float-cond    = "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+              | "ord" | "uno" | "une" | "ugt" | "uge" | "ult" | "ule" ;
+
+trap-code     = "stk_ovf" | "heap_oob" | "int_ovf" | "int_divz"
+              | "bad_conversion_to_integer" | "null_reference"
+              | "unreachable" | "table_oob" | "indirect_call_to_null"
+              | "heap_misaligned"
+              | "user" integer                   (* user-defined trap, e.g. user2 *)
+              | ident ;                          (* forward-compatible catch-all *)
+
+atomic-rmw-op = "add" | "sub" | "and" | "or" | "xor" | "xchg"
+              | "nand" | "umin" | "umax" | "smin" | "smax" ;
+
+(* ------------------------------------ *)
+(*  Types                                                        *)
+(* ------------------------------------ *)
+
+type          = scalar-type | vector-type ;
+
+scalar-type   = int-type | float-type ;
+
+int-type      = "i8" | "i16" | "i32" | "i64" | "i128" ;
+
+float-type    = "f16" | "f32" | "f64" | "f128" ;
+
+vector-type   = lane-type "x" positive-integer ;  (* e.g. i32x4, f64x2, i8x16 *)
+
+lane-type     = int-type | float-type ;
+
+dynamic-type  = "dt" positive-integer ;            (* e.g. dt0, dt3 *)
+
+(* ------------------------------------ *)
+(*  Names and entity references                                  *)
+(* ------------------------------------ *)
+
+external-name = name                             (* %my_func *)
+              | user-ref ":" integer             (* u3:17 *)
+              | "userextname" positive-integer ; (* userextname0 *)
+
+name          = "%" ( letter | digit ) { letter | digit | "_" } ;
+                (* e.g. %foo, %0, %my_func_42 *)
+
+ident         = ( letter | "_" ) { letter | digit | "_" } ;
+                (* Rust-style identifier without leading % *)
+
+value         = "v" positive-integer ;           (* v0, v1, v512 *)
+
+block         = "block" positive-integer ;       (* block0, block42 *)
+
+stack-slot    = "ss" positive-integer ;          (* ss0, ss1 *)
+
+dyn-stack-slot = "dss" positive-integer ;        (* dss0 *)
+
+global-value  = "gv" positive-integer ;          (* gv0, gv3 *)
+
+memory-type   = "mt" positive-integer ;          (* mt0 *)
+
+sig-ref       = "sig" positive-integer ;         (* sig0, sig2 *)
+
+func-ref      = "fn" positive-integer ;          (* fn0, fn5 *)
+
+constant      = "const" positive-integer ;       (* const0, const2 *)
+
+user-ref      = "u" positive-integer ;           (* u0, u3 *)
+
+exception-table-ref = "extable" positive-integer ;
+
+exception-tag = "tag" positive-integer ;
+
+try-call-ret  = "ret" positive-integer ;
+
+try-call-exn  = "exn" positive-integer ;
+
+(* ------------------------------------ *)
+(*  Immediates                                                   *)
+(* ------------------------------------ *)
+
+imm64         = [ "-" | "+" ] ( decimal-digits | hex-integer ) ;
+
+uimm64        = decimal-digits | hex-integer ;
+
+uimm32        = decimal-digits | hex-integer ;
+
+uimm8         = decimal-digits | hex-integer ;
+
+offset32      = ( "+" | "-" ) decimal-digits
+              | ( "+" | "-" ) hex-integer ;      (* e.g. +8, -72, +0x10 *)
+
+offset64      = ( "+" | "-" ) decimal-digits
+              | ( "+" | "-" ) hex-integer ;
+
+(* uimm128: SIMD constant; either a single little-endian hex blob
+   or a bracketed list of lane-typed literals                    *)
+uimm128       = hex-integer                      (* e.g. 0x000102...1e1f *)
+              | "[" uimm128-literal { uimm128-literal } "]" ;
+
+uimm128-literal = imm64 | ieee32 | ieee64 ;
+
+ieee16        = float-number ;
+
+ieee32        = float-number ;
+
+ieee64        = float-number ;
+
+ieee128       = float-number ;
+
+float-number  = [ "-" | "+" ]
+                ( "0x" hex-float-mantissa [ "p" [ "-" ] decimal-digits ]
+                | decimal-digits "." decimal-digits
+                | "NaN"
+                | "NaN:" hex-integer
+                | "sNaN:" hex-integer
+                | "Inf"
+                | "-Inf" ) ;
+
+hex-float-mantissa = hex-digits [ "." hex-digits ] ;
+
+hex-integer   = "0x" { "_" } hex-digits { hex-digit-or-underscore } ;
+
+hex-sequence  = "#" hex-digits ;                 (* used for raw constant bytes *)
+
+decimal-digits = digit { digit } ;
+
+hex-digits    = hex-digit { hex-digit } ;
+
+hex-digit-or-underscore = hex-digit | "_" ;
+
+string-literal = '"' { any-char-except-dquote } '"' ;
+
+letter        = "a" | ... | "z" | "A" | ... | "Z" ;
+
+digit         = "0" | ... | "9" ;
+
+hex-digit     = digit | "a" | ... | "f" | "A" | ... | "F" ;
+
+positive-integer = digit { digit } ;             (* leading zeros not allowed for entity refs *)
+
+(* ------------------------------------ *)
+(*  Filecheck / run-command annotations (inside comments)       *)
+(* ------------------------------------ *)
+
+(*
+  These are not part of the grammar of the IR body itself, but appear
+  as specially-parsed comment content in .clif test files.
+*)
+
+filecheck-comment = ";" ( filecheck-directive | run-command | print-command | plain-comment ) ;
+
+filecheck-directive = "check:"    pattern-text
+                    | "sameln:"   pattern-text
+                    | "nextln:"   pattern-text
+                    | "unordered:" pattern-text
+                    | "not:"      pattern-text
+                    | "regex:"    pattern-text
+                    | "empty"
+                    | "not-empty" ;
+
+run-command   = "run" [ ":" run-invocation comparison run-expected ] ;
+
+print-command = "print" [ ":" run-invocation ] ;
+
+run-invocation = name "(" [ data-value-list ] ")" ;
+
+comparison    = "==" | "!=" ;
+
+run-expected  = data-value
+              | "[" [ data-value { "," data-value } ] "]" ;
+
+data-value-list = data-value { "," data-value } ;
+
+data-value    = imm64 | ieee16 | ieee32 | ieee64 | uimm128 ;
+
+pattern-text  = (* arbitrary text to end of line, matched by filecheck *) ;
