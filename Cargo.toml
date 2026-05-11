@@ -12,8 +12,17 @@ categories = ["development-tools", "compilers"]
 [dependencies]
 ancpp = "2.0.0"
 
+cranelift-codegen = "0.131.1"
+cranelift-frontend = "0.131.1"
+cranelift-module = "0.131.1"
+cranelift-jit = "0.131.1"
+cranelift-native = "0.131.1"
+cranelift-object = "0.131.1"
+
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+object = "0.39.1"
+# elf_loader = { version = "0.14.1", features = ["full"] }
 
 [patch.crates-io]
 ancpp = { path = "../xiaoxuan-c-preprocessor/" }

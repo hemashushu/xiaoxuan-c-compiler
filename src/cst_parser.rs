@@ -11,7 +11,7 @@ use std::{
 
 use ancpp::{
     context::{FileProvider, HeaderFileCache, PreprocessResult},
-    linter::Linter,
+    linter::Lint,
     location::Location,
     peekable_iter::PeekableIter,
     process_source_file,
@@ -54,7 +54,7 @@ pub struct Parser<'a> {
     upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
 
     /// Message that report to users
-    linters: Vec<Linter>,
+    lints: Vec<Lint>,
 
     /// The symbol table stack for the current parsing context, used for checking if an identifier is a typedef name or an enumeration constant.
     symbol_stack: Vec<SymbolTable>,
@@ -66,11 +66,11 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     pub fn new(
         upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
-        linters: Vec<Linter>,
+        lints: Vec<Lint>,
     ) -> Self {
         Self {
             upstream,
-            linters,
+            lints,
             symbol_stack: vec![],
             last_location: Location::default(),
         }
@@ -526,7 +526,7 @@ impl<'a> Parser<'a> {
 
 pub struct ParseResult {
     pub cst: TranslationUnit,
-    pub linters: Vec<Linter>,
+    pub lints: Vec<Lint>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -559,17 +559,17 @@ where
 
     let PreprocessResult {
         token_with_locations,
-        linters,
+        lints,
     } = preprocess_result;
     let mut token_iter = token_with_locations.into_iter();
     let mut peekable_token_iter = PeekableIter::new(&mut token_iter);
-    let mut parser = Parser::new(&mut peekable_token_iter, linters);
+    let mut parser = Parser::new(&mut peekable_token_iter, lints);
 
     parser.enter_scope(); // build the root/global scope
 
     let cst = parser.parse_translation_unit()?;
-    let linters = parser.linters;
-    let parse_result = ParseResult { cst, linters };
+    let lints = parser.lints;
+    let parse_result = ParseResult { cst, lints };
     Ok(parse_result)
 }
 

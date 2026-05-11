@@ -9,3 +9,4 @@ pub mod cst_parser;
 pub mod error;
 pub mod file_position;
 pub mod ir;
+pub mod code_generator;

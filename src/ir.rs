@@ -11,51 +11,17 @@
 //!
 //! There are several main APIs for constructing Cranelift IR:
 //!
-//! ## `cranelift_module::Module`
-//!
-//! https://docs.rs/cranelift-module/latest/cranelift_module/trait.Module.html
-//!
-//! - `fn cranelift_module::Module::declare_function(name: &str, linkage: Linkage, signature: &Signature) -> ModuleResult<FuncId>`
-//! - `fn cranelift_module::Module::declare_data(name: &str, linkage: Linkage, writable: bool, tls: bool) -> ModuleResult<DataId>`
-//! - `fn cranelift_module::Module::declare_func_in_func(func_id: FuncId,func: &mut Function,) -> FuncRef`
-//! - `fn cranelift_module::Module::declare_data_in_func(data: DataId, func: &mut Function) -> GlobalValue`
-//!
-//! ## `cranelift_frontend::FunctionBuilder`
-//!
-//! https://docs.rs/cranelift-frontend/latest/cranelift_frontend/struct.FunctionBuilder.html
-//!
-//! - `fn cranelift_frontend::FunctionBuilder::import_function(&mut self, data: ExtFuncData) -> FuncRef`
-//! - `fn cranelift_frontend::FunctionBuilder::import_signature(signature: Signature) -> SigRef`
-//!
-//! ## `cranelift_codegen::ir::InstBuilder`
-//!
-//! https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/trait.InstBuilder.html
+//! - `cranelift_module::Module`: https://docs.rs/cranelift-module/latest/cranelift_module/trait.Module.html
+//! - `cranelift_frontend::FunctionBuilder`: https://docs.rs/cranelift-frontend/latest/cranelift_frontend/struct.FunctionBuilder.html
+//! - `cranelift_codegen::ir::InstBuilder`: https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/trait.InstBuilder.html
 
 // ------------------------------------
-// Cranelift IR — Abstract Syntax Tree
-// ------------------------------------
-//
-// This file describes the complete AST for Cranelift IR (CLIF).
-//
-// Sources:
-// - {cranelift_source_code_tree}/codegen/src/ir/           (authoritative Rust type definitions)
-// - {cranelift_source_code_tree}/codegen/meta/src/cdsl/    (instruction format structure)
-// - {cranelift_source_code_tree}/reader/src/parser.rs      (text-format grammar)
-// - https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/trait.InstBuilder.html
-//
-// Notation used throughout this file:
-// - struct Foo { field: Type }                             -> product type
-// - enum Bar { Variant, Variant(T), Variant { f: T } }     -> sum type
-// - type Alias = Type                                      -> type alias
-// - u8 / u16 / u32 / u64 / i64 / bool / String             -> primitives
-// - Vec<T>                                                 -> ordered, heap-allocated list
-// - Option<T>                                              -> optional value
-//
+// Abstract Syntax Tree for Cranelift IR
 // ------------------------------------
 
 // Node Sections:
 //
-// - Top-level file structure (`ClifFile`, `TestCommand`, `TargetSpec`)
+// - Top-level file structure
 // - Entity references — all 13 newtype-u32 indices (`Value`, `Block`, `StackSlot`, ...)
 // - Type system — scalars, floats, SIMD vectors, dynamic vectors
 // - Immediates — `Imm64`, `Uimm64`, `Uimm8`, `Offset32`, `Ieee16/32/64/128`, `ConstantData`
@@ -75,33 +41,14 @@
 // TOP-LEVEL FILE STRUCTURE
 // ------------------------------------
 
-// A .clif file consists of zero or more test-file items.  Each item is either
-// a test/target/settings directive (preamble) or a function definition.
-//
-// Since the current project is focused on code generation,
-// the test-file preamble items are not relevant, only
-// the function definitions are relevant.
-pub struct ClifFile {
-    // commands: Vec<TestCommand>,  // "test <cmd>" lines
-    // targets: Vec<TargetSpec>,    // "target <isa> [<flags>]" lines
-    pub functions: Vec<FunctionDef>, // "function %name(...) -> ... { ... }"
+pub struct Module {
+    // imported function declarations
+    // imported data declarations
+    // read-only data definitions (.rodata)
+    // read-write data definitions (.data)
+    // uninitialized data definitions (.bss)
+    pub functions: Vec<FunctionDef>,
 }
-
-// Test command from the test-file preamble (e.g. "test compile").  Not relevant to code generation.
-//
-// ```rust
-// struct TestCommand {
-//     name: String, // cat | verifier | compile | interpret | run | legalizer | ...
-// }
-// struct TargetSpec {
-//     isa: String,            // x86_64 | aarch64 | s390x | riscv64 | pulley32 | pulley64
-//     flags: Vec<TargetFlag>, // e.g. "has_avx=true"
-// }
-// struct TargetFlag {
-//     key: String,
-//     value: String,
-// }
-// ```
 
 // ------------------------------------
 // ENTITY REFERENCES  (newtype u32 indices)
@@ -596,7 +543,7 @@ pub struct BlockParam {
 }
 
 // ------------------------------------
-// §13  INSTRUCTION NODE
+// INSTRUCTION NODE
 // ------------------------------------
 
 pub struct Instruction {
