@@ -340,13 +340,13 @@ where
 #[cfg(test)]
 mod tests {
     use cranelift_codegen::ir::{
-        AbiParam, Function, InstBuilder, MemFlags, StackSlotData, StackSlotKind, UserFuncName,
-        types,
+        AbiParam, BlockArg, Function, InstBuilder, MemFlags, StackSlotData, StackSlotKind,
+        UserFuncName, condcodes::IntCC, types,
     };
     use cranelift_frontend::FunctionBuilder;
     use cranelift_module::{Linkage, Module};
 
-    use crate::code_generator::{CodeGenerator, new_jit_module};
+    use crate::code_generator::{CodeGenerator, new_jit_module, new_object_module};
 
     /// A simple function used for the importing function testing
     extern "C" fn add(a: i32, b: i32) -> i32 {
@@ -459,7 +459,7 @@ mod tests {
             let mut func_main_sig = code_generator.generator_module.make_signature();
             func_main_sig.returns.push(AbiParam::new(types::I32));
 
-            // The linkage of function 'main' should be 'export', so that the linker can find it.
+            // The linkage of function `main` should be `export`, so that the linker can find it.
             //
             // Ref:
             // https://docs.rs/cranelift-module/latest/cranelift_module/trait.Module.html#tymethod.declare_function
@@ -493,7 +493,6 @@ mod tests {
             let call0 = function_builder.ins().call(func_inc_ref, &[value0]);
             let value1 = {
                 let results = function_builder.inst_results(call0);
-                // assert_eq!(results.len(), 1);
                 results[0]
             };
             function_builder.ins().return_(&[value1]);
@@ -541,20 +540,13 @@ mod tests {
         // The pointer remains valid until either JITModule::free_memory is called or in the future some way of
         // deallocating this individual function is used.
         // https://docs.rs/cranelift-jit/latest/cranelift_jit/struct.JITModule.html#method.get_finalized_function
-        let func_inc_ptr = code_generator
-            .generator_module
-            .get_finalized_function(func_inc_id);
         let func_main_ptr = code_generator
             .generator_module
             .get_finalized_function(func_main_id);
 
         // Cast `ptr` to Rust function
-        let fn_inc: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(func_inc_ptr) };
         let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
 
-        assert_eq!(fn_inc(0), 11);
-        assert_eq!(fn_inc(3), 14);
-        assert_eq!(fn_inc(13), 24);
         assert_eq!(fn_main(), 24);
 
         // Free memory allocated for code and data segments of compiled functions.
@@ -622,8 +614,8 @@ mod tests {
                 FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
 
             let entry_block = function_builder.create_block();
-            function_builder.switch_to_block(entry_block);
             function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
             function_builder.seal_block(entry_block);
 
             // read and write
@@ -689,6 +681,8 @@ mod tests {
         let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
 
         assert_eq!(fn_main(), 41);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     /// Test calling external function by importing symbols.
@@ -796,6 +790,8 @@ mod tests {
         let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
 
         assert_eq!(fn_main(), 24);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     /// Test importing data by importing symbols.
@@ -856,8 +852,8 @@ mod tests {
                 FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
 
             let entry_block = function_builder.create_block();
-            function_builder.switch_to_block(entry_block);
             function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
             function_builder.seal_block(entry_block);
 
             // read and write
@@ -916,6 +912,8 @@ mod tests {
 
         assert_eq!(fn_main(), 41);
         assert_eq!(data1, 30);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     /// Test the usage of stack slot, which is a region of memory on the stack (in the function's stack frame) that
@@ -969,8 +967,8 @@ mod tests {
                 FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
 
             let entry_block = function_builder.create_block();
-            function_builder.switch_to_block(entry_block);
             function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
             function_builder.seal_block(entry_block);
 
             let ss = function_builder.create_sized_stack_slot(StackSlotData::new(
@@ -1024,6 +1022,8 @@ mod tests {
         let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
 
         assert_eq!(fn_main(), 24);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     /// Test the usage of local variables.
@@ -1079,8 +1079,8 @@ mod tests {
                 FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
 
             let entry_block = function_builder.create_block();
-            function_builder.switch_to_block(entry_block);
             function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
             function_builder.seal_block(entry_block);
 
             let var0 = function_builder.declare_var(types::I32);
@@ -1137,6 +1137,8 @@ mod tests {
         let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
 
         assert_eq!(fn_main(), 24);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     /// Test calling external function by function pointer using `call_indirect` instruction.
@@ -1236,30 +1238,731 @@ mod tests {
         let fn_add_ptr = add as *const u8;
 
         assert_eq!(fn_main(fn_add_ptr), 24);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     #[test]
     fn test_code_generator_jit_conditional_branch() {
-        // todo
+        let jit_module = new_jit_module(vec![]);
+        let mut code_generator = CodeGenerator::new(jit_module);
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main(in) -> int {
+        //     if in > 50 {
+        //         1
+        //     } else {
+        //         0
+        //     }
+        // }
+        // ```
+        let func_main_id = {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.params.push(AbiParam::new(types::I32));
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            let exit_block = function_builder.create_block();
+
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.append_block_params_for_function_returns(exit_block);
+
+            // conditional branch
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+            let value_in = function_builder.block_params(entry_block)[0];
+            let value_0 = function_builder.ins().iconst(types::I32, 0);
+            let value_1 = function_builder.ins().iconst(types::I32, 1);
+            let value_cmp =
+                function_builder
+                    .ins()
+                    .icmp_imm(IntCC::UnsignedGreaterThan, value_in, 50);
+            function_builder.ins().brif(
+                value_cmp,
+                exit_block,
+                &[BlockArg::Value(value_1)],
+                exit_block,
+                &[BlockArg::Value(value_0)],
+            );
+
+            // exit block
+            function_builder.switch_to_block(exit_block);
+            function_builder.seal_block(exit_block);
+            let value_out = function_builder.block_params(exit_block)[0];
+            function_builder.ins().return_(&[value_out]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            // Display the text of IR
+            // `println!("{}", func_main.display());`
+
+            // Generate function's code
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            func_main_id
+        };
+
+        code_generator
+            .generator_module
+            .finalize_definitions()
+            .unwrap();
+
+        let func_main_ptr = code_generator
+            .generator_module
+            .get_finalized_function(func_main_id);
+
+        let fn_main: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
+
+        assert_eq!(fn_main(30), 0);
+        assert_eq!(fn_main(50), 0);
+        assert_eq!(fn_main(51), 1);
+        assert_eq!(fn_main(80), 1);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     #[test]
     fn test_code_generator_jit_loop() {
-        // todo
+        let jit_module = new_jit_module(vec![]);
+        let mut code_generator = CodeGenerator::new(jit_module);
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main(max) -> int {
+        //     block_entry:
+        //         jump block_loop(0,0)
+        //     block_loop(sum,i)
+        //         if i > max {
+        //             jump block_exit(sum)
+        //         } else {
+        //             let sum = sum + i
+        //             let i = i + 1
+        //             jump block_loop(sum, i)
+        //         }
+        //     block_exit(sum)
+        //         return sum
+        // }
+        // ```
+        let func_main_id = {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.params.push(AbiParam::new(types::I32));
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            let loop_block = function_builder.create_block();
+            let exit_block = function_builder.create_block();
+
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.append_block_params_for_function_returns(exit_block);
+
+            // entry block
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+            let value_max = function_builder.block_params(entry_block)[0];
+            let value_0 = function_builder.ins().iconst(types::I32, 0);
+            function_builder.ins().jump(
+                loop_block,
+                &[BlockArg::Value(value_0), BlockArg::Value(value_0)],
+            );
+
+            // loop block
+            function_builder.append_block_param(loop_block, types::I32); // sum
+            function_builder.append_block_param(loop_block, types::I32); // i
+
+            function_builder.switch_to_block(loop_block);
+            let value_sum = function_builder.block_params(loop_block)[0];
+            let value_i = function_builder.block_params(loop_block)[1];
+            let value_cmp =
+                function_builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThan, value_i, value_max);
+
+            let next_sum = function_builder.ins().iadd(value_sum, value_i);
+            let next_i = function_builder.ins().iadd_imm(value_i, 1);
+
+            function_builder.ins().brif(
+                value_cmp,
+                exit_block,
+                &[BlockArg::Value(value_sum)],
+                loop_block,
+                &[BlockArg::Value(next_sum), BlockArg::Value(next_i)],
+            );
+
+            // exit block
+            function_builder.switch_to_block(exit_block);
+            function_builder.seal_block(exit_block);
+            let value_out = function_builder.block_params(exit_block)[0];
+            function_builder.ins().return_(&[value_out]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            // Display the text of IR
+            // `println!("{}", func_main.display());`
+
+            // Generate function's code
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            func_main_id
+        };
+
+        code_generator
+            .generator_module
+            .finalize_definitions()
+            .unwrap();
+
+        let func_main_ptr = code_generator
+            .generator_module
+            .get_finalized_function(func_main_id);
+
+        let fn_main: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
+
+        assert_eq!(fn_main(10), 55);
+        assert_eq!(fn_main(100), 5050);
+
+        unsafe { code_generator.generator_module.free_memory() };
     }
 
     #[test]
     fn test_code_generator_object_define_functions() {
-        // todo
+        let object_module = new_object_module("test", None, None);
+        let mut code_generator = CodeGenerator::new(object_module);
+
+        // Building function "inc"
+        //
+        // ```pseudo
+        // fn inc (a:i32) -> i32 {
+        //    a+11
+        // }
+        // ```
+        let func_inc_id = {
+            let mut func_inc_sig = code_generator.generator_module.make_signature();
+            func_inc_sig.params.push(AbiParam::new(types::I32));
+            func_inc_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_inc_id = code_generator
+                .generator_module
+                .declare_function("inc", Linkage::Local, &func_inc_sig)
+                .unwrap();
+
+            let mut func_inc = Function::with_name_signature(
+                UserFuncName::user(0, func_inc_id.as_u32()),
+                func_inc_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_inc, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
+
+            function_builder.seal_block(entry_block);
+
+            let value_0 = function_builder.ins().iconst(types::I32, 11);
+            let value_1 = function_builder.block_params(entry_block)[0];
+            let value_2 = function_builder.ins().iadd(value_0, value_1);
+            function_builder.ins().return_(&[value_2]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            code_generator.generator_context.func = func_inc;
+
+            code_generator
+                .generator_module
+                .define_function(func_inc_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            func_inc_id
+        };
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main () -> i32 {
+        //    inc(13)
+        // }
+        // ```
+        {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let func_inc_ref = code_generator
+                .generator_module
+                .declare_func_in_func(func_inc_id, function_builder.func);
+
+            let entry_block = function_builder.create_block();
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+
+            let value0 = function_builder.ins().iconst(types::I32, 13);
+            let call0 = function_builder.ins().call(func_inc_ref, &[value0]);
+            let value1 = {
+                let results = function_builder.inst_results(call0);
+                results[0]
+            };
+            function_builder.ins().return_(&[value1]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+        }
+
+        // Finalize all relocations and output an object.
+        //
+        // https://docs.rs/cranelift-object/latest/cranelift_object/struct.ObjectModule.html#method.finish
+        let product = code_generator.generator_module.finish();
+
+        // Save the object file to disk.
+        let binary = product.emit().unwrap();
+
+        let tmp_dir = std::env::temp_dir();
+        let tmp_object_file = tmp_dir.join("test-ancc-code-generator-define-functions.o");
+        std::fs::write(&tmp_object_file, binary).unwrap();
+
+        // Use command `gcc -o test.elf test.o` to link the object file into an executable, and then execute it.
+        let tmp_executable_file = tmp_dir.join("test-ancc-code-generator-define-functions.elf");
+        let output = std::process::Command::new("gcc")
+            .args([
+                "-static",
+                "-o",
+                tmp_executable_file.to_str().unwrap(),
+                tmp_object_file.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to execute GCC to link object file");
+
+        assert!(output.status.success(), "failed to link object file");
+
+        let output = std::process::Command::new(tmp_executable_file.to_str().unwrap())
+            .output()
+            .expect("failed to execute process");
+
+        assert_eq!(output.status.code(), Some(24));
+
+        // Remove the temporary files
+        std::fs::remove_file(tmp_object_file).unwrap();
+        std::fs::remove_file(tmp_executable_file).unwrap();
     }
 
     #[test]
     fn test_code_generator_object_define_data() {
-        // todo
+        let object_module = new_object_module("test", None, None);
+        let mut code_generator = CodeGenerator::new(object_module);
+
+        let pointer_type = code_generator.get_type_of_pointer();
+
+        let bin0 = 11_i32.to_le_bytes().to_vec();
+        let bin1 = 13_i32.to_le_bytes().to_vec();
+
+        let data_id0 = code_generator
+            .define_read_only_data("d0", bin0, Some(2), false, false)
+            .unwrap();
+        let data_id1 = code_generator
+            .define_read_write_data("d1", bin1, Some(2), false, false)
+            .unwrap();
+        let data_id2 = code_generator
+            .define_uninitialized_data("d2", 4, Some(2), false, false)
+            .unwrap();
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main() -> int {
+        //     let d0 = read_only_data(11)
+        //     let d1 = read_write_data(13)
+        //     let d2 = uninitialized_data
+        //
+        //     let v0 = load(d1)
+        //     let v1 = v0 + 17
+        //     store(v1, d2)        ;; now d2 contains 30
+        //     let v2 = load(d0)    ;; v2 is 11
+        //     let v3 = load(d2)    ;; v3 is 30
+        //     v2 + v3              ;; return 41
+        // }
+        // ```
+        {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+
+            // read and write
+            let gv0 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id0, function_builder.func);
+            let gv1 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id1, function_builder.func);
+            let gv2 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id2, function_builder.func);
+
+            let p0 = function_builder.ins().global_value(pointer_type, gv0);
+            let p1 = function_builder.ins().global_value(pointer_type, gv1);
+            let p2 = function_builder.ins().global_value(pointer_type, gv2);
+
+            let mem_flags = MemFlags::new();
+
+            let value_0 = function_builder.ins().load(types::I32, mem_flags, p1, 0);
+            let value_1 = function_builder.ins().iadd_imm(value_0, 17);
+            function_builder.ins().store(mem_flags, value_1, p2, 0);
+
+            let value_2 = function_builder.ins().load(types::I32, mem_flags, p0, 0);
+            let value_3 = function_builder.ins().load(types::I32, mem_flags, p2, 0);
+            let value_add = function_builder.ins().iadd(value_2, value_3);
+
+            function_builder.ins().return_(&[value_add]);
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+        }
+
+        // Finalize all relocations and output an object.
+        let product = code_generator.generator_module.finish();
+
+        // Save the object file to disk.
+        let binary = product.emit().unwrap();
+
+        let tmp_dir = std::env::temp_dir();
+        let tmp_object_file = tmp_dir.join("test-ancc-code-generator-define-data.o");
+        std::fs::write(&tmp_object_file, binary).unwrap();
+
+        // Use command `gcc -o test.elf test.o` to link the object file into an executable, and then execute it.
+        let tmp_executable_file = tmp_dir.join("test-ancc-code-generator-define-data.elf");
+        let output = std::process::Command::new("gcc")
+            .args([
+                "-static",
+                "-o",
+                tmp_executable_file.to_str().unwrap(),
+                tmp_object_file.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to execute GCC to link object file");
+
+        assert!(output.status.success(), "failed to link object file");
+
+        let output = std::process::Command::new(tmp_executable_file.to_str().unwrap())
+            .output()
+            .expect("failed to execute process");
+
+        assert_eq!(output.status.code(), Some(41));
+
+        // Remove the temporary files
+        std::fs::remove_file(tmp_object_file).unwrap();
+        std::fs::remove_file(tmp_executable_file).unwrap();
     }
 
+    /// Test a program with multiple object files.
     #[test]
     fn test_code_generator_object_multiple_objects() {
-        // todo
+        // This program consists of two object files, `lib.o` and `main.o`.
+        //
+        // Where `lib.o` contains a public data `num:i32` and a public function `get_and_inc() -> i32`
+        // that returns the value of `num` plus 1.
+        //
+        // And `main.o` contains a function `main() -> i32` that write `41` to `num`,
+        // and then calls `get_and_inc()` to get the value of `num` and returns it.
+
+        let tmp_dir = std::env::temp_dir();
+        let tmp_object_file_lib = tmp_dir.join("test-ancc-code-generator-multi-object-lib.o");
+        let tmp_object_file_main = tmp_dir.join("test-ancc-code-generator-multi-object-main.o");
+        let tmp_executable_file = tmp_dir.join("test-ancc-code-generator-multi-object.elf");
+
+        // Build `lib.o`
+        {
+            let object_module = new_object_module("test", None, None);
+            let mut code_generator = CodeGenerator::new(object_module);
+
+            let pointer_type = code_generator.get_type_of_pointer();
+
+            let data_id = code_generator
+                .define_uninitialized_data("num", 4, Some(2), true, false)
+                .unwrap();
+
+            // Building function "get_and_inc"
+            // ```pseudo
+            // fn get_and_inc() -> i32 {
+            //     let num = load(data_id)
+            //     num + 1
+            // }
+
+            let mut func_sig = code_generator.generator_module.make_signature();
+            func_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_id = code_generator
+                .generator_module
+                .declare_function("get_and_inc", Linkage::Export, &func_sig)
+                .unwrap();
+
+            let mut func =
+                Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), func_sig);
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+
+            let gv = code_generator
+                .generator_module
+                .declare_data_in_func(data_id, function_builder.func);
+            let p = function_builder.ins().global_value(pointer_type, gv);
+            let mem_flags = MemFlags::new();
+            let num = function_builder.ins().load(types::I32, mem_flags, p, 0);
+            let num_plus_1 = function_builder.ins().iadd_imm(num, 1);
+            function_builder.ins().return_(&[num_plus_1]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            code_generator.generator_context.func = func;
+
+            code_generator
+                .generator_module
+                .define_function(func_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            // Finalize all relocations and output an object.
+            let product = code_generator.generator_module.finish();
+
+            // Save the object file to disk.
+            let binary = product.emit().unwrap();
+
+            std::fs::write(&tmp_object_file_lib, binary).unwrap();
+        }
+
+        // Build `main.o`
+        {
+            let object_module = new_object_module("test", None, None);
+            let mut code_generator = CodeGenerator::new(object_module);
+
+            let pointer_type = code_generator.get_type_of_pointer();
+
+            // Import `num`.
+            let data_id = code_generator
+                .generator_module
+                .declare_data("num", Linkage::Import, true, false)
+                .unwrap();
+
+            // Import `get_and_inc`.
+            let mut func_get_and_inc_num_sig = code_generator.generator_module.make_signature();
+            func_get_and_inc_num_sig
+                .returns
+                .push(AbiParam::new(types::I32));
+
+            let func_get_and_inc_num_id = code_generator
+                .generator_module
+                .declare_function("get_and_inc", Linkage::Import, &func_get_and_inc_num_sig)
+                .unwrap();
+
+            // Building function "main"
+            // ```pseudo
+            // fn main() -> i32 {
+            //     import num: i32
+            //     import get_and_inc_num() -> i32
+            //
+            //     store(41, data_id)
+            //     get_and_inc_num()
+            // }
+            // ```
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.switch_to_block(entry_block);
+            function_builder.seal_block(entry_block);
+
+            // Write 41 to `num`
+            let gv = code_generator
+                .generator_module
+                .declare_data_in_func(data_id, function_builder.func);
+
+            let p = function_builder.ins().symbol_value(pointer_type, gv);
+            let mem_flags = MemFlags::new();
+            let value_0 = function_builder.ins().iconst(types::I32, 41);
+            function_builder.ins().store(mem_flags, value_0, p, 0);
+
+            // Call `get_and_inc_num()` to get the value of `num` and return it.
+            let func_get_and_inc_num_ref = code_generator
+                .generator_module
+                .declare_func_in_func(func_get_and_inc_num_id, function_builder.func);
+
+            let call = function_builder.ins().call(func_get_and_inc_num_ref, &[]);
+            let value = function_builder.inst_results(call)[0];
+            function_builder.ins().return_(&[value]);
+
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            // Generate function's code
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            // Finalize all relocations and output an object.
+            let product = code_generator.generator_module.finish();
+
+            // Save the object file to disk.
+            let binary = product.emit().unwrap();
+
+            std::fs::write(&tmp_object_file_main, binary).unwrap();
+        }
+
+        // Use command `gcc -o test.elf lib.o main.o` to link the object file into an executable, and then execute it.
+        let output = std::process::Command::new("gcc")
+            .args([
+                "-static",
+                "-o",
+                tmp_executable_file.to_str().unwrap(),
+                tmp_object_file_lib.to_str().unwrap(),
+                tmp_object_file_main.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to execute GCC to link object file");
+
+        assert!(output.status.success(), "failed to link object file");
+
+        let output = std::process::Command::new(tmp_executable_file.to_str().unwrap())
+            .output()
+            .expect("failed to execute process");
+
+        assert_eq!(output.status.code(), Some(42));
+
+        // Remove the temporary files
+        std::fs::remove_file(tmp_object_file_lib).unwrap();
+        std::fs::remove_file(tmp_object_file_main).unwrap();
+        std::fs::remove_file(tmp_executable_file).unwrap();
     }
 }
