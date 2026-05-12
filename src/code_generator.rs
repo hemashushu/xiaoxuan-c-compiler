@@ -10,9 +10,7 @@ use cranelift_codegen::{
 };
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{
-    DataDescription, DataId, Linkage,  ModuleError, default_libcall_names,
-};
+use cranelift_module::{DataDescription, DataId, Linkage, ModuleError, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 pub struct CodeGenerator<T>
@@ -226,9 +224,11 @@ where
     // Define a data with the given contents.
     //
     // The process of accessing a data (which is inside .data/.ro_data/.bss sections) from a function body:
-    // 1. let gv = construct a GlobalValue object, e.g. `Module::declare_data_in_func(...)`
-    // 2. let target_data_address = ins().symbol_value(gv)
-    // 3. let value = ins().load(target_data_address)
+    // 1. let gv = module::declare_data_in_func(...)
+    // 2a. let target_data_address = ins().symbol_value(gv)     ;; for symbols
+    // 2b. let target_data_address = ins().global_value(gv)     ;; data objects defined in the module
+    // 3a. let value = ins().load(Type, target_data_address)    ;; read
+    // 3b. ins.store(value, target_data_address)                ;; write
     pub fn define_read_only_data(
         &mut self,
         name: &str,
@@ -328,38 +328,19 @@ where
         Ok(data_id)
     }
 
-    pub fn import_data(
-        &mut self,
-        name: &str,
-        writable: bool,
-        thread_local: bool,
-    ) -> Result<DataId, ModuleError> {
-        self.generator_module
-            .declare_data(name, Linkage::Import, writable, thread_local)
-    }
-
-    pub fn import_function(
-        &mut self,
-        name: &str,
-        signature: &cranelift_codegen::ir::Signature,
-    ) -> Result<cranelift_module::FuncId, ModuleError> {
-        self.generator_module
-            .declare_function(name, Linkage::Import, signature)
-    }
-
     pub fn get_type_of_pointer(&self) -> cranelift_codegen::ir::Type {
         // Get the pointer type of the target platform.
         // - `self.generator_module.target_config().pointer_type()`
         // - `self.generator_module.isa().pointer_type()`
 
-        self.generator_module.isa().pointer_type()
+        self.generator_module.target_config().pointer_type()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use cranelift_codegen::ir::{
-        AbiParam, Function, InstBuilder, StackSlotData, StackSlotKind, UserFuncName, function,
+        AbiParam, Function, InstBuilder, MemFlags, StackSlotData, StackSlotKind, UserFuncName,
         types,
     };
     use cranelift_frontend::FunctionBuilder;
@@ -372,9 +353,7 @@ mod tests {
         a + b
     }
 
-    /// Test the basic usage of Cranelift JITModule, including:
-    /// - Creating functions
-    /// - Invoking internal functions
+    /// Test function definition and function calling.
     #[test]
     fn test_code_generator_jit_define_functions() {
         let jit_module = new_jit_module(vec![]);
@@ -588,13 +567,132 @@ mod tests {
         unsafe { code_generator.generator_module.free_memory() };
     }
 
+    /// Test defining a data object and accessing it from a function body.
     #[test]
     fn test_code_generator_jit_define_data() {
-        // todo
+        let jit_module = new_jit_module(vec![]);
+        let mut code_generator = CodeGenerator::new(jit_module);
+
+        let pointer_type = code_generator.get_type_of_pointer();
+
+        let bin0 = 11_i32.to_le_bytes().to_vec();
+        let bin1 = 13_i32.to_le_bytes().to_vec();
+
+        let data_id0 = code_generator
+            .define_read_only_data("d0", bin0, Some(2), false, false)
+            .unwrap();
+        let data_id1 = code_generator
+            .define_read_write_data("d1", bin1, Some(2), false, false)
+            .unwrap();
+        let data_id2 = code_generator
+            .define_uninitialized_data("d2", 4, Some(2), false, false)
+            .unwrap();
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main() -> int {
+        //     let d0 = read_only_data(11)
+        //     let d1 = read_write_data(13)
+        //     let d2 = uninitialized_data
+        //
+        //     let v0 = load(d1)
+        //     let v1 = v0 + 17
+        //     store(v1, d2)        ;; now d2 contains 30
+        //     let v2 = load(d0)    ;; v2 is 11
+        //     let v3 = load(d2)    ;; v3 is 30
+        //     v2 + v3              ;; return 41
+        // }
+        // ```
+        let func_main_id = {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            function_builder.switch_to_block(entry_block);
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.seal_block(entry_block);
+
+            // read and write
+            let gv0 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id0, function_builder.func);
+            let gv1 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id1, function_builder.func);
+            let gv2 = code_generator
+                .generator_module
+                .declare_data_in_func(data_id2, function_builder.func);
+
+            let p0 = function_builder.ins().global_value(pointer_type, gv0);
+            let p1 = function_builder.ins().global_value(pointer_type, gv1);
+            let p2 = function_builder.ins().global_value(pointer_type, gv2);
+
+            // The memory flags to use for load and store instructions.
+            // https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/struct.MemFlags.html
+            let mem_flags = MemFlags::new();
+
+            // Memory load
+            // https://docs.rs/cranelift-codegen/latest/cranelift_codegen/ir/trait.InstBuilder.html#method.load
+            let value_0 = function_builder.ins().load(types::I32, mem_flags, p1, 0);
+            let value_1 = function_builder.ins().iadd_imm(value_0, 17);
+            function_builder.ins().store(mem_flags, value_1, p2, 0);
+
+            let value_2 = function_builder.ins().load(types::I32, mem_flags, p0, 0);
+            let value_3 = function_builder.ins().load(types::I32, mem_flags, p2, 0);
+            let value_add = function_builder.ins().iadd(value_2, value_3);
+
+            function_builder.ins().return_(&[value_add]);
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            // Display the text of IR
+            // `println!("{}", func_main.display());`
+
+            // Generate function's code
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            func_main_id
+        };
+
+        code_generator
+            .generator_module
+            .finalize_definitions()
+            .unwrap();
+
+        let func_main_ptr = code_generator
+            .generator_module
+            .get_finalized_function(func_main_id);
+
+        let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
+
+        assert_eq!(fn_main(), 41);
     }
 
     /// Test calling external function by importing symbols.
-    /// Note that only the JIT module supports importing symbols, the object module does not support it.
+    /// Note that only the JIT module supports importing symbols, the `Object` module does not support it.
     #[test]
     fn test_code_generator_jit_import_function() {
         // Convertion between Rust function and function pointer:
@@ -619,7 +717,10 @@ mod tests {
         fn_add_sig.params.push(AbiParam::new(types::I32));
         fn_add_sig.returns.push(AbiParam::new(types::I32));
 
-        let fn_add_id = code_generator.import_function("add", &fn_add_sig).unwrap();
+        let fn_add_id = code_generator
+            .generator_module
+            .declare_function("add", Linkage::Import, &fn_add_sig)
+            .unwrap();
 
         // Building function "main"
         //
@@ -697,17 +798,132 @@ mod tests {
         assert_eq!(fn_main(), 24);
     }
 
+    /// Test importing data by importing symbols.
+    /// Note that only the JIT module supports importing symbols, the `Object` module does not support it.
     #[test]
     fn test_code_generator_jit_import_data() {
-        // todo
+        let data0: i32 = 11;
+        let mut data1: i32 = 13;
+
+        let data0_ptr = &data0 as *const i32 as *const u8;
+        let data1_ptr = &mut data1 as *mut i32 as *const u8;
+
+        let jit_module = new_jit_module(vec![
+            ("data0".to_string(), data0_ptr),
+            ("data1".to_string(), data1_ptr),
+        ]);
+        let mut code_generator = CodeGenerator::new(jit_module);
+
+        let pointer_type = code_generator.get_type_of_pointer();
+
+        // import data
+        let data0_id = code_generator
+            .generator_module
+            .declare_data("data0", Linkage::Import, false, false)
+            .unwrap();
+        let data1_id = code_generator
+            .generator_module
+            .declare_data("data1", Linkage::Import, true, false)
+            .unwrap();
+
+        // Building function "main"
+        //
+        // ```pseudo
+        // fn main(ptr0, ptr1) -> int {
+        //     let v0 = load(ptr1)
+        //     let v1 = v0 + 17
+        //     store(ptr1, v1)      ;; now data1 contains 30
+        //     let v2 = load(ptr0)  ;; v2 is 11
+        //     let v3 = load(ptr1)  ;; v3 is 30
+        //     v2 + v3              ;; return 41
+        // }
+        // ```
+        let func_main_id = {
+            let mut func_main_sig = code_generator.generator_module.make_signature();
+            func_main_sig.returns.push(AbiParam::new(types::I32));
+
+            let func_main_id = code_generator
+                .generator_module
+                .declare_function("main", Linkage::Export, &func_main_sig)
+                .unwrap();
+
+            let mut func_main = Function::with_name_signature(
+                UserFuncName::user(0, func_main_id.as_u32()),
+                func_main_sig,
+            );
+
+            let mut function_builder =
+                FunctionBuilder::new(&mut func_main, &mut code_generator.function_builder_context);
+
+            let entry_block = function_builder.create_block();
+            function_builder.switch_to_block(entry_block);
+            function_builder.append_block_params_for_function_params(entry_block);
+            function_builder.seal_block(entry_block);
+
+            // read and write
+            let gv0 = code_generator
+                .generator_module
+                .declare_data_in_func(data0_id, function_builder.func);
+            let gv1 = code_generator
+                .generator_module
+                .declare_data_in_func(data1_id, function_builder.func);
+
+            let p0 = function_builder.ins().symbol_value(pointer_type, gv0);
+            let p1 = function_builder.ins().symbol_value(pointer_type, gv1);
+
+            let mem_flags = MemFlags::new();
+
+            let value_0 = function_builder.ins().load(types::I32, mem_flags, p1, 0);
+            let value_1 = function_builder.ins().iadd_imm(value_0, 17);
+            function_builder.ins().store(mem_flags, value_1, p1, 0);
+
+            let value_2 = function_builder.ins().load(types::I32, mem_flags, p0, 0);
+            let value_3 = function_builder.ins().load(types::I32, mem_flags, p1, 0);
+            let value_add = function_builder.ins().iadd(value_2, value_3);
+
+            function_builder.ins().return_(&[value_add]);
+            function_builder.seal_all_blocks();
+            function_builder.finalize();
+
+            // Display the text of IR
+            // `println!("{}", func_main.display());`
+
+            // Generate function's code
+            code_generator.generator_context.func = func_main;
+
+            code_generator
+                .generator_module
+                .define_function(func_main_id, &mut code_generator.generator_context)
+                .unwrap();
+
+            code_generator
+                .generator_module
+                .clear_context(&mut code_generator.generator_context);
+
+            func_main_id
+        };
+
+        code_generator
+            .generator_module
+            .finalize_definitions()
+            .unwrap();
+
+        let func_main_ptr = code_generator
+            .generator_module
+            .get_finalized_function(func_main_id);
+
+        let fn_main: extern "C" fn() -> i32 = unsafe { std::mem::transmute(func_main_ptr) };
+
+        assert_eq!(fn_main(), 41);
+        assert_eq!(data1, 30);
     }
 
-    /// Test the usage of stack slot, which is a region of memory on the stack that
+    /// Test the usage of stack slot, which is a region of memory on the stack (in the function's stack frame) that
     /// can be used to store temporary values (they are local variables also) during function execution.
     ///
     /// Example of stack slot usage:
     ///
-    /// ```
+    /// ```rust
     /// let ss = function_builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 2, None));
     /// function_builder.ins().stack_store(Value, ss, Offset);
     /// let v = function_builder.ins().stack_load(Type, ss, Offset);
@@ -1015,6 +1231,8 @@ mod tests {
 
         let fn_main: extern "C" fn(*const u8) -> i32 =
             unsafe { std::mem::transmute(func_main_ptr) };
+
+        // Get the pointer of the Rust function `add`
         let fn_add_ptr = add as *const u8;
 
         assert_eq!(fn_main(fn_add_ptr), 24);
