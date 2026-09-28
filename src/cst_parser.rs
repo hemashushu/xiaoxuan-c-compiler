@@ -10,15 +10,13 @@ use std::{
 };
 
 use ancpp::{
+    consts::{C23_KEYWORD_STRS, C23Keyword},
     context::{FileProvider, HeaderFileCache, PreprocessResult},
     linter::Lint,
     location::Location,
     peekable_iter::PeekableIter,
     process_source_file,
-    token::{
-        C23_KEYWORD_STRS, C23Keyword, IntegerNumber, IntegerNumberWidth, Number, Punctuator, Token,
-        TokenWithLocation,
-    },
+    token::{IntegerNumber, IntegerNumberWidth, Number, Punctuator, Token, TokenWithLocation},
 };
 
 use crate::{
@@ -64,10 +62,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(
-        upstream: &'a mut PeekableIter<'a, TokenWithLocation>,
-        lints: Vec<Lint>,
-    ) -> Self {
+    pub fn new(upstream: &'a mut PeekableIter<'a, TokenWithLocation>, lints: Vec<Lint>) -> Self {
         Self {
             upstream,
             lints,

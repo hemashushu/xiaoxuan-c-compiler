@@ -12,11 +12,13 @@ Most C toolchains carry decades of accumulated behavior: platform quirks, implic
 
 ## What it includes
 
-| Component        | Description                                                   |
-|------------------|---------------------------------------------------------------|
-| Compiler         | A C23 compiler targeting multiple architectures               |
-| Build system     | Reproducible, host-independent build orchestration            |
-| Standard library | A libc co-designed with the compiler for consistent semantics |
+| Component        | Description                                                                  |
+|------------------|------------------------------------------------------------------------------|
+| Compiler         | A C23 compiler targeting multiple architectures                              |
+| Linter           | Built-in static analysis for friendly diagnostics and code style enforcement |
+| Build system     | Reproducible, host-independent build orchestration                           |
+| Package manager  | Manages applications and libraries with dependency resolution                |
+| Standard library | A libc co-designed with the compiler for consistent semantics                |
 
 ## Design principles
 
