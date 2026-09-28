@@ -17,31 +17,22 @@
  *
  * References:
  * - https://learn.arm.com/learning-paths/servers-and-cloud-computing/pac/
+ * - https://oliviagallucci.com/the-anatomy-of-a-mach-o-structure-code-signing-and-pac/
  */
 
 #include <stdio.h>
-#include <stdint.h>
+#include <ptrauth.h>
 
-void hello_world(void)
+static int foo(int x)
 {
-    puts("Hello, world!");
+    return x + 1;
 }
 
 int main()
 {
-    void (*fp)(void) = hello_world; // arm64e ABI signs the pointer when it's stored in memory
-    fp();                           // authenticates on call -> succeeds
-
-    // Flip a bit that lives in the pointer's PAC signature field (above the
-    // 48-bit virtual address range), corrupting the signature only.
-    uintptr_t bits;
-    __builtin_memcpy(&bits, &fp, sizeof(bits));
-    bits ^= (1ULL << 50);
-    __builtin_memcpy(&fp, &bits, sizeof(bits));
-
-    puts("invoking corrupted pointer");
-    fp(); // authenticates on call -> fails -> crashes
-
-    puts("unreachable");
-    return 0;
+    void *raw = (void *)&foo;
+    void *signedp = ptrauth_sign_unauthenticated(raw,
+                                                 ptrauth_key_process_dependent_code, 0);
+    printf("raw    = %p\n", raw);
+    printf("signed = %p\n", signedp);
 }
