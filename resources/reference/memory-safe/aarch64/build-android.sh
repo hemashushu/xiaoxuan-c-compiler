@@ -24,18 +24,18 @@ if [[ ! "$ANDROID_API" =~ ^[0-9]+$ ]] || (( ANDROID_API < 31 )); then
     exit 1
 fi
 
-# Builds two aarch64 ELF executable variants for each source file:
-# - baseline: pointer authentication (PAC) ABI (armv8.3-a).
-# - memtag:   PAC + Memory Tagging Extension (MTE) ABI (armv8.5-a+memtag),
-#             instrumented with clang's memtag-stack/memtag-heap sanitizers.
+# Builds three aarch64 ELF executable variants for each source file:
+# - baseline: default AArch64 target, without explicitly enabling PAC or MTE.
+# - pac:      Armv8.3-A with PAC return-address signing enabled.
+# - memtag:   PAC return-address signing + MTE and clang's memtag sanitizers.
 
 TARGET="aarch64-linux-android${ANDROID_API}"
 CFLAGS_COMMON=(--target="$TARGET" -std=c23 -O0 -fno-unwind-tables -fno-asynchronous-unwind-tables)
-CFLAGS_BASELINE=(-march=armv8.3-a+pauth)
-CFLAGS_MEMTAG=(-march=armv8.5-a+memtag -fsanitize=memtag-stack,memtag-heap)
+CFLAGS_PAC=(-march=armv8.3-a+pauth -mbranch-protection=pac-ret)
+CFLAGS_MEMTAG=(-march=armv8.5-a+memtag -mbranch-protection=pac-ret -fsanitize=memtag-stack,memtag-heap)
 
-VARIANTS=(baseline memtag)
-SOURCES=(pac return-address-overwrite pac out-of-bounds use-after-free double-free wild-pointer)
+VARIANTS=(baseline pac memtag)
+SOURCES=(pac return-address-overwrite out-of-bounds use-after-free double-free wild-pointer)
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/*.o "$OUT_DIR"/*.elf
@@ -43,11 +43,14 @@ rm -f "$OUT_DIR"/*.o "$OUT_DIR"/*.elf
 for name in "${SOURCES[@]}"; do
     for variant in "${VARIANTS[@]}"; do
         variant_cflags=("${CFLAGS_COMMON[@]}")
-        if [[ "$variant" == "memtag" ]]; then
-            variant_cflags+=("${CFLAGS_MEMTAG[@]}")
-        else
-            variant_cflags+=("${CFLAGS_BASELINE[@]}")
-        fi
+        case "$variant" in
+            pac)
+                variant_cflags+=("${CFLAGS_PAC[@]}")
+                ;;
+            memtag)
+                variant_cflags+=("${CFLAGS_MEMTAG[@]}")
+                ;;
+        esac
 
         clang "${variant_cflags[@]}" -c -o "$OUT_DIR/$name.$variant.o" "$SCRIPT_DIR/$name.c"
         clang "${variant_cflags[@]}" -o "$OUT_DIR/$name.$variant.elf" "$OUT_DIR/$name.$variant.o"
