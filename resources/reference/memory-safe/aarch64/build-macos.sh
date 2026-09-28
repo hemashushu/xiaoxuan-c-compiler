@@ -21,7 +21,7 @@ CFLAGS_COMMON=(-isysroot "$SDK" -mmacosx-version-min="$MIN_VERSION" -std=c23 -O0
 CFLAGS_ARM64E_X1=(-fsanitize=memtag-stack,memtag-heap)
 
 ARCHS=(arm64 arm64e arm64e.x1)
-SOURCES=(pac return-address-overwrite out-of-bounds use-after-free double-free wild-pointer)
+SOURCES=(return-address-overwrite out-of-bounds use-after-free double-free wild-pointer)
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/*.o "$OUT_DIR"/*.macho || true

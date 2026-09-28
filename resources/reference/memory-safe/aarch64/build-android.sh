@@ -35,7 +35,7 @@ CFLAGS_PAC=(-march=armv8.3-a+pauth -mbranch-protection=pac-ret)
 CFLAGS_MEMTAG=(-march=armv8.5-a+memtag -mbranch-protection=pac-ret -fsanitize=memtag-stack,memtag-heap)
 
 VARIANTS=(baseline pac memtag)
-SOURCES=(pac return-address-overwrite out-of-bounds use-after-free double-free wild-pointer)
+SOURCES=(return-address-overwrite out-of-bounds use-after-free double-free wild-pointer)
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_DIR"/*.o "$OUT_DIR"/*.elf
