@@ -5,9 +5,6 @@ set -euo pipefail
 # - arm64:     standard AArch64 ABI, without the arm64e ABI.
 # - arm64e:    baseline pointer authentication (PAC) ABI.
 # - arm64e.x1: PAC version 2 (CPA2) + Memory Tagging Extension (MTE) ABI.
-# The arm64e variants use distinct CPU_SUBTYPE_ARM64E capability variants.
-#
-# arm64e.x1 require Apple Silicon M6 or newer.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
